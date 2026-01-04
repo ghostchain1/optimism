@@ -43,7 +43,6 @@ type DeployOPChainInput struct {
 
 	OperatorFeeScalar   uint32
 	OperatorFeeConstant uint64
-	SuperchainConfig    common.Address
 
 	UseCustomGasToken bool
 }

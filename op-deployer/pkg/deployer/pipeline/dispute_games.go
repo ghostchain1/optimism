@@ -109,6 +109,7 @@ func deployDisputeGame(
 	out, err := env.Scripts.DeployDisputeGame.Run(
 		opcm.DeployDisputeGameInput{
 			Release:                  "dev",
+			UseV2:                    true,
 			VmAddress:                vmAddr,
 			GameKind:                 "FaultDisputeGame",
 			GameType:                 game.DisputeGameType,
