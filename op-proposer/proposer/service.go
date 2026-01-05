@@ -48,6 +48,15 @@ type ProposerConfig struct {
 	// This option is not necessary when higher proposal latency is acceptable and L1 is healthy.
 	AllowNonFinalized bool
 
+	// GuardURL is an optional HTTP endpoint to vet proposals.
+	GuardURL string
+
+	// GuardTimeout bounds the guard request.
+	GuardTimeout time.Duration
+
+	// GuardFailOpen continues proposal submission when the guard is unreachable if true.
+	GuardFailOpen bool
+
 	WaitNodeSync bool
 }
 
@@ -70,6 +79,8 @@ type ProposerService struct {
 	rpcServer    *oprpc.Server
 
 	balanceMetricer io.Closer
+
+	guard GuardClient
 
 	stopped atomic.Bool
 }
@@ -94,6 +105,9 @@ func (ps *ProposerService) initFromCLIConfig(ctx context.Context, version string
 	ps.PollInterval = cfg.PollInterval
 	ps.NetworkTimeout = cfg.TxMgrConfig.NetworkTimeout
 	ps.AllowNonFinalized = cfg.AllowNonFinalized
+	ps.GuardURL = cfg.GuardURL
+	ps.GuardTimeout = cfg.GuardTimeout
+	ps.GuardFailOpen = cfg.GuardFailOpen
 	ps.WaitNodeSync = cfg.WaitNodeSync
 
 	ps.initL2ooAddress(cfg)
@@ -112,6 +126,7 @@ func (ps *ProposerService) initFromCLIConfig(ctx context.Context, version string
 	if err := ps.initPProf(cfg); err != nil {
 		return fmt.Errorf("failed to init profiling: %w", err)
 	}
+	ps.guard = ps.initGuard(cfg)
 	if err := ps.initDriver(); err != nil {
 		return fmt.Errorf("failed to init Driver: %w", err)
 	}
@@ -201,6 +216,21 @@ func (ps *ProposerService) initPProf(cfg *CLIConfig) error {
 	return nil
 }
 
+func (ps *ProposerService) initGuard(cfg *CLIConfig) GuardClient {
+	if cfg.GuardURL == "" {
+		ps.Log.Info("Guard checks disabled")
+		return nil
+	}
+
+	timeout := cfg.GuardTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	ps.Log.Info("Guard checks enabled", "url", cfg.GuardURL, "timeout", timeout, "fail_open", cfg.GuardFailOpen)
+	return NewHTTPGuardClient(cfg.GuardURL, timeout, cfg.GuardFailOpen, ps.Log)
+}
+
 func (ps *ProposerService) initMetricsServer(cfg *CLIConfig) error {
 	if !cfg.MetricsConfig.Enabled {
 		ps.Log.Info("Metrics disabled")
@@ -249,6 +279,7 @@ func (ps *ProposerService) initDriver() error {
 		L1Client:       ps.L1Client,
 		Multicaller:    batching.NewMultiCaller(ps.L1Client.Client(), batching.DefaultBatchSize),
 		ProposalSource: ps.ProposalSource,
+		Guard:          ps.guard,
 	})
 	if err != nil {
 		return err

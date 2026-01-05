@@ -66,6 +66,9 @@ type DriverSetup struct {
 
 	// ProposalSource retrieves the proposal data to submit
 	ProposalSource source.ProposalSource
+
+	// Guard optionally vets proposals before submission.
+	Guard GuardClient
 }
 
 // L2OutputSubmitter is responsible for proposing outputs
@@ -84,6 +87,8 @@ type L2OutputSubmitter struct {
 	l2ooABI      *abi.ABI
 
 	dgfContract DGFContract
+
+	guard GuardClient
 }
 
 // NewL2OutputSubmitter creates a new L2 Output Submitter
@@ -137,6 +142,7 @@ func newL2OOSubmitter(ctx context.Context, cancel context.CancelFunc, setup Driv
 
 		l2ooContract: l2ooContract,
 		l2ooABI:      parsed,
+		guard:        setup.Guard,
 	}, nil
 }
 
@@ -157,6 +163,7 @@ func newDGFSubmitter(ctx context.Context, cancel context.CancelFunc, setup Drive
 		cancel:      cancel,
 
 		dgfContract: dgfCaller,
+		guard:       setup.Guard,
 	}, nil
 }
 
@@ -418,6 +425,39 @@ func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.P
 	return nil
 }
 
+func (l *L2OutputSubmitter) guardCheck(ctx context.Context, output source.Proposal) bool {
+	if l.guard == nil {
+		return true
+	}
+
+	gctx := ctx
+	if l.Cfg.GuardTimeout > 0 {
+		var cancel context.CancelFunc
+		gctx, cancel = context.WithTimeout(ctx, l.Cfg.GuardTimeout)
+		defer cancel()
+	}
+
+	decision, err := l.guard.CheckProposal(gctx, output)
+	if err != nil {
+		l.Metr.RecordGuardDecision("error")
+		if l.Cfg.GuardFailOpen {
+			l.Log.Warn("Guard check failed, proceeding (fail-open)", "err", err)
+			return true
+		}
+		l.Log.Warn("Guard check failed, blocking proposal", "err", err)
+		return false
+	}
+
+	if !decision.Allow {
+		l.Metr.RecordGuardDecision("deny")
+		l.Log.Warn("Guard denied proposal", "sequenceNum", output.SequenceNum, "root", output.Root, "reason", decision.Reason)
+		return false
+	}
+
+	l.Metr.RecordGuardDecision("allow")
+	return true
+}
+
 // loop is responsible for creating & submitting the next outputs
 // The loop regularly polls the L2 chain to infer whether to make the next proposal.
 func (l *L2OutputSubmitter) loop() {
@@ -484,6 +524,10 @@ func (l *L2OutputSubmitter) waitNodeSync() error {
 func (l *L2OutputSubmitter) proposeOutput(ctx context.Context, output source.Proposal) {
 	cCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
+
+	if !l.guardCheck(cCtx, output) {
+		return
+	}
 
 	if err := l.sendTransaction(cCtx, output); err != nil {
 		logCtx := []interface{}{

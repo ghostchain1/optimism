@@ -56,6 +56,15 @@ type CLIConfig struct {
 	// for L2 blocks derived from non-finalized L1 data.
 	AllowNonFinalized bool
 
+	// GuardURL is the HTTP endpoint to vet proposals.
+	GuardURL string
+
+	// GuardTimeout is the timeout for contacting the guard.
+	GuardTimeout time.Duration
+
+	// GuardFailOpen toggles fail-open behaviour on guard failures.
+	GuardFailOpen bool
+
 	TxMgrConfig txmgr.CLIConfig
 
 	RPCConfig oprpc.CLIConfig
@@ -123,6 +132,9 @@ func (c *CLIConfig) Check() error {
 	if c.DGFAddress != "" && slices.Contains(postInteropGameTypes, c.DisputeGameType) && len(c.SupervisorRpcs) == 0 {
 		return ErrMissingSupervisorRpc
 	}
+	if c.GuardURL != "" && c.GuardTimeout <= 0 {
+		return errors.New("guard-timeout must be positive when guard-url is set")
+	}
 
 	return nil
 }
@@ -137,6 +149,9 @@ func NewConfig(ctx *cli.Context) *CLIConfig {
 		PollInterval:                 ctx.Duration(flags.PollIntervalFlag.Name),
 		TxMgrConfig:                  txmgr.ReadCLIConfig(ctx),
 		AllowNonFinalized:            ctx.Bool(flags.AllowNonFinalizedFlag.Name),
+		GuardURL:                     ctx.String(flags.GuardURLFlag.Name),
+		GuardTimeout:                 ctx.Duration(flags.GuardTimeoutFlag.Name),
+		GuardFailOpen:                ctx.Bool(flags.GuardFailOpenFlag.Name),
 		RPCConfig:                    oprpc.ReadCLIConfig(ctx),
 		LogConfig:                    oplog.ReadCLIConfig(ctx),
 		MetricsConfig:                opmetrics.ReadCLIConfig(ctx),

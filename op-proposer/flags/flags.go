@@ -55,6 +55,23 @@ var (
 		Usage:   "Allow the proposer to submit proposals for L2 blocks derived from non-finalized L1 blocks.",
 		EnvVars: prefixEnvVars("ALLOW_NON_FINALIZED"),
 	}
+	GuardURLFlag = &cli.StringFlag{
+		Name:    "guard-url",
+		Usage:   "HTTP endpoint to vet proposals before submission (skip if empty).",
+		EnvVars: prefixEnvVars("GUARD_URL"),
+	}
+	GuardTimeoutFlag = &cli.DurationFlag{
+		Name:    "guard-timeout",
+		Usage:   "Timeout for the guard HTTP request.",
+		Value:   5 * time.Second,
+		EnvVars: prefixEnvVars("GUARD_TIMEOUT"),
+	}
+	GuardFailOpenFlag = &cli.BoolFlag{
+		Name:    "guard-fail-open",
+		Usage:   "If true, continue proposing when the guard is unreachable/timeouts; if false, block proposals on guard failures.",
+		Value:   true,
+		EnvVars: prefixEnvVars("GUARD_FAIL_OPEN"),
+	}
 	DisputeGameFactoryAddressFlag = &cli.StringFlag{
 		Name:    "game-factory-address",
 		Usage:   "Address of the DisputeGameFactory contract",
@@ -102,6 +119,9 @@ var optionalFlags = []cli.Flag{
 	DisputeGameFactoryAddressFlag,
 	ProposalIntervalFlag,
 	DisputeGameTypeFlag,
+	GuardURLFlag,
+	GuardTimeoutFlag,
+	GuardFailOpenFlag,
 	ActiveSequencerCheckDurationFlag,
 	WaitNodeSyncFlag,
 }
