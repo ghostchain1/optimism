@@ -7,6 +7,8 @@
   <br />
 </div>
 
+> **GhostChain fork:** Primary OP Stack fork for GhostL2/L3; guard hooks and the L3 scaffold live here (branch `develop`).
+
 **Table of Contents**
 
 <!--TOC-->
