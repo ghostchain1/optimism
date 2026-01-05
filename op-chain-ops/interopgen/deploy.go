@@ -254,7 +254,6 @@ func DeployL2ToL1(l1Host *script.Host, superCfg *SuperchainConfig, superDeployme
 		AllowCustomDisputeParameters: true,
 		OperatorFeeScalar:            cfg.GasPriceOracleOperatorFeeScalar,
 		OperatorFeeConstant:          cfg.GasPriceOracleOperatorFeeConstant,
-		SuperchainConfig:             superDeployment.SuperchainConfigProxy,
 		UseCustomGasToken:            cfg.UseCustomGasToken,
 	})
 	if err != nil {

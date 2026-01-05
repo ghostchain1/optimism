@@ -93,6 +93,10 @@ func (g *httpGuardClient) CheckBlock(ctx context.Context, payload *eth.Execution
 			Number: ref.L1Origin.Number,
 			Hash:   ref.L1Origin.Hash,
 		},
+		SafeHead: &guardBlockRef{
+			Number: ref.Number,
+			Hash:   ref.Hash,
+		},
 	}
 
 	body, err := json.Marshal(reqBody)
