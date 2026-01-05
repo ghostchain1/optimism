@@ -126,6 +126,10 @@ type Sequencer struct {
 
 	// toBlockRef converts a payload to a block-ref, and is only configurable for test-purposes
 	toBlockRef func(rollupCfg *rollup.Config, payload *eth.ExecutionPayload) (eth.L2BlockRef, error)
+
+	guard         GuardClient
+	guardTimeout  time.Duration
+	guardFailOpen bool
 }
 
 var _ SequencerIface = (*Sequencer)(nil)
@@ -138,6 +142,9 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 	asyncGossip AsyncGossiper,
 	metrics Metrics,
 	eng attributes.EngineController,
+	guard GuardClient,
+	guardTimeout time.Duration,
+	guardFailOpen bool,
 ) *Sequencer {
 	return &Sequencer{
 		ctx:              driverCtx,
@@ -153,6 +160,9 @@ func NewSequencer(driverCtx context.Context, log log.Logger, rollupCfg *rollup.C
 		eng:              eng,
 		timeNow:          time.Now,
 		toBlockRef:       derive.PayloadToBlockRef,
+		guard:            guard,
+		guardTimeout:     guardTimeout,
+		guardFailOpen:    guardFailOpen,
 	}
 }
 
@@ -276,6 +286,11 @@ func (d *Sequencer) onBuildSealed(x engine.BuildSealedEvent) {
 		"parent", x.Envelope.ExecutionPayload.ParentID(),
 		"txs", len(x.Envelope.ExecutionPayload.Transactions),
 		"time", uint64(x.Envelope.ExecutionPayload.Timestamp))
+
+	if d.guard != nil && !d.guardCheck(x.Envelope, x.Ref) {
+		d.handleInvalid()
+		return
+	}
 
 	// generous timeout, the conductor is important
 	ctx, cancel := context.WithTimeout(d.ctx, time.Second*30)
@@ -436,6 +451,31 @@ func (d *Sequencer) onEngineResetConfirmedEvent(engine.EngineResetConfirmedEvent
 	// This will also prevent any potential reset-loop from running too hot.
 	d.nextAction = d.timeNow().Add(time.Second * time.Duration(d.rollupCfg.BlockTime))
 	d.log.Info("Engine reset confirmed, sequencer may continue", "next", d.nextActionOK)
+}
+
+func (d *Sequencer) guardCheck(payload *eth.ExecutionPayloadEnvelope, ref eth.L2BlockRef) bool {
+	gctx := d.ctx
+	if d.guardTimeout > 0 {
+		var cancel context.CancelFunc
+		gctx, cancel = context.WithTimeout(d.ctx, d.guardTimeout)
+		defer cancel()
+	}
+
+	decision, err := d.guard.CheckBlock(gctx, payload, ref)
+	if err != nil {
+		if d.guardFailOpen {
+			d.log.Warn("Guard check failed, proceeding (fail-open)", "err", err)
+			return true
+		}
+		d.log.Warn("Guard check failed, blocking block production", "err", err)
+		return false
+	}
+
+	if !decision.Allow {
+		d.log.Warn("Guard denied block", "block", ref, "reason", decision.Reason)
+		return false
+	}
+	return true
 }
 
 func (d *Sequencer) onForkchoiceUpdate(x engine.ForkchoiceUpdateEvent) {

@@ -174,6 +174,26 @@ var (
 		Value:    20,
 		Category: L1RPCCategory,
 	}
+	GuardURLFlag = &cli.StringFlag{
+		Name:     "guard-url",
+		Usage:    "HTTP endpoint to vet sequencer-built blocks before publish.",
+		EnvVars:  prefixEnvVars("GUARD_URL"),
+		Category: SequencerCategory,
+	}
+	GuardTimeoutFlag = &cli.DurationFlag{
+		Name:     "guard-timeout",
+		Usage:    "Timeout for guard HTTP request.",
+		Value:    5 * time.Second,
+		EnvVars:  prefixEnvVars("GUARD_TIMEOUT"),
+		Category: SequencerCategory,
+	}
+	GuardFailOpenFlag = &cli.BoolFlag{
+		Name:     "guard-fail-open",
+		Usage:    "If true, continue building blocks when guard is unreachable/timeouts; if false, block production.",
+		Value:    true,
+		EnvVars:  prefixEnvVars("GUARD_FAIL_OPEN"),
+		Category: SequencerCategory,
+	}
 	L1CacheSize = &cli.UintFlag{
 		Name: "l1.cache-size",
 		Usage: "Cache size for blocks, receipts and transactions. " +
@@ -482,6 +502,9 @@ var optionalFlags = []cli.Flag{
 	SequencerMaxSafeLagFlag,
 	SequencerL1Confs,
 	SequencerRecoverMode,
+	GuardURLFlag,
+	GuardTimeoutFlag,
+	GuardFailOpenFlag,
 	FinalityLookbackFlag,
 	FinalityDelayFlag,
 	L1EpochPollIntervalFlag,

@@ -80,6 +80,11 @@ type Config struct {
 	// Cancel to request a premature shutdown of the node itself, e.g. when halting. This may be nil.
 	Cancel context.CancelCauseFunc
 
+	// Guard is an optional HTTP vetting endpoint for sequencer-built blocks.
+	GuardURL      string
+	GuardTimeout  time.Duration
+	GuardFailOpen bool
+
 	// Conductor is used to determine this node is the leader sequencer.
 	ConductorEnabled    bool
 	ConductorRpc        ConductorRPCFunc
@@ -136,6 +141,9 @@ func (cfg *Config) Check() error {
 		if err := cfg.Beacon.Check(); err != nil {
 			return fmt.Errorf("misconfigured L1 Beacon API endpoint: %w", err)
 		}
+	}
+	if cfg.GuardURL != "" && cfg.GuardTimeout <= 0 {
+		return fmt.Errorf("guard-timeout must be positive when guard-url is set")
 	}
 	if cfg.InteropConfig == nil {
 		return errors.New("missing interop config")

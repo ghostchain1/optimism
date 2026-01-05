@@ -119,6 +119,9 @@ func NewConfig(ctx cliiface.Context, log log.Logger) (*config.Config, error) {
 		Sync:                        *syncConfig,
 		L2FollowSource:              NewL2FollowSourceConfig(ctx),
 		RollupHalt:                  haltOption,
+		GuardURL:                    ctx.String(flags.GuardURLFlag.Name),
+		GuardTimeout:                ctx.Duration(flags.GuardTimeoutFlag.Name),
+		GuardFailOpen:               ctx.Bool(flags.GuardFailOpenFlag.Name),
 
 		ConductorEnabled: ctx.Bool(flags.ConductorEnabledFlag.Name),
 		ConductorRpc: func(context.Context) (string, error) {

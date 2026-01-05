@@ -49,6 +49,9 @@ func NewDriver(
 	sequencerConductor conductor.SequencerConductor,
 	altDA AltDAIface,
 	indexingMode bool,
+	guard sequencing.GuardClient,
+	guardTimeout time.Duration,
+	guardFailOpen bool,
 ) *Driver {
 	driverCtx, driverCancel := context.WithCancel(context.Background())
 
@@ -120,7 +123,7 @@ func NewDriver(
 		ec.SetOriginSelectorResetter(findL1Origin)
 
 		sequencer = sequencing.NewSequencer(driverCtx, log, cfg, attrBuilder, findL1Origin,
-			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, ec)
+			sequencerStateListener, sequencerConductor, asyncGossiper, metrics, ec, guard, guardTimeout, guardFailOpen)
 		sys.Register("sequencer", sequencer)
 	} else {
 		sequencer = sequencing.DisabledSequencer{}

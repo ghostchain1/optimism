@@ -86,6 +86,9 @@ func RollupNodeMain(ctx *cli.Context, closeApp context.CancelCauseFunc) (cliapp.
 		return nil, fmt.Errorf("unable to create the rollup node config: %w", err)
 	}
 	cfg.Cancel = closeApp
+	if cfg.GuardURL != "" {
+		log.Info("Guard checks enabled", "url", cfg.GuardURL, "timeout", cfg.GuardTimeout, "fail_open", cfg.GuardFailOpen)
+	}
 
 	// Only pretty-print the banner if it is a terminal log. Otherwise log it as key-value pairs.
 	if logCfg.Format == "terminal" {
