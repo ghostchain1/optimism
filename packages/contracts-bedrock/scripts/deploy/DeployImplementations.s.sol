@@ -1019,6 +1019,10 @@ contract DeployImplementations is Script {
         (dii_, dio_) = getIOContracts();
         vm.etch(address(dii_), type(DeployImplementationsInput).runtimeCode);
         vm.etch(address(dio_), type(DeployImplementationsOutput).runtimeCode);
+        // Enable cheatcodes for the IO helper contracts so they can use vm.prank and friends
+        // during validation and initialization steps.
+        vm.allowCheatcodes(address(dii_));
+        vm.allowCheatcodes(address(dio_));
     }
 
     function getIOContracts() public view returns (DeployImplementationsInput dii_, DeployImplementationsOutput dio_) {

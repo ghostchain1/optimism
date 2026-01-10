@@ -81,6 +81,8 @@ func L1VersionsDataFor(chainID uint64) (string, error) {
 		return VersionsMainnetData, nil
 	case 11155111:
 		return VersionsSepoliaData, nil
+	case 1337:
+		return VersionsSepoliaData, nil
 	default:
 		return "", fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
@@ -91,6 +93,8 @@ func L1VersionsFor(chainID uint64) (L1Versions, error) {
 	case 1:
 		return L1VersionsMainnet, nil
 	case 11155111:
+		return L1VersionsSepolia, nil
+	case 1337:
 		return L1VersionsSepolia, nil
 	default:
 		return L1Versions{}, fmt.Errorf("unsupported chain ID: %d", chainID)
@@ -103,6 +107,8 @@ func SuperchainFor(chainID uint64) (*superchain.Superchain, error) {
 		return superchain.Superchains["mainnet"], nil
 	case 11155111:
 		return superchain.Superchains["sepolia"], nil
+	case 1337:
+		return superchain.Superchains["sepolia"], nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
@@ -114,6 +120,8 @@ func ChainNameFor(chainID uint64) (string, error) {
 		return "mainnet", nil
 	case 11155111:
 		return "sepolia", nil
+	case 1337:
+		return "devnet-1337", nil
 	default:
 		return "", fmt.Errorf("unrecognized chain ID: %d", chainID)
 	}
@@ -138,6 +146,9 @@ func ManagerImplementationAddrFor(chainID uint64) (common.Address, error) {
 	case 11155111:
 		// Generated using the bootstrap command on 10/18/2024.
 		return common.HexToAddress("0xf564eea7960ea244bfebcbbb17858748606147bf"), nil
+	case 1337:
+		// Use the deployed OPCM proxy from the local devnet deployment
+		return common.HexToAddress("0x97353cC78a3433e10E4d4023d6353916760Ea823"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
@@ -151,6 +162,9 @@ func ManagerOwnerAddrFor(chainID uint64) (common.Address, error) {
 	case 11155111:
 		// Set to development multisig
 		return common.HexToAddress("0xDEe57160aAfCF04c34C887B5962D0a69676d3C8B"), nil
+	case 1337:
+		// Use local deployer as owner
+		return common.HexToAddress("0x7964ef0fBD1306461bab9Ad05118DBC4248D0546"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
@@ -164,6 +178,9 @@ func SystemOwnerAddrFor(chainID uint64) (common.Address, error) {
 	case 11155111:
 		// Set to development multisig
 		return common.HexToAddress("0xDEe57160aAfCF04c34C887B5962D0a69676d3C8B"), nil
+	case 1337:
+		// Use local deployer as system owner
+		return common.HexToAddress("0x7964ef0fBD1306461bab9Ad05118DBC4248D0546"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
