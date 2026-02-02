@@ -1,8 +1,8 @@
 module github.com/ethereum-optimism/optimism
 
-go 1.22.0
+go 1.23.0
 
-toolchain go1.22.7
+toolchain go1.23.8
 
 require (
 	github.com/BurntSushi/toml v1.4.0
@@ -10,7 +10,7 @@ require (
 	github.com/btcsuite/btcd v0.24.2
 	github.com/btcsuite/btcd/chaincfg/chainhash v1.1.0
 	github.com/cockroachdb/pebble v1.1.2
-	github.com/consensys/gnark-crypto v0.12.1
+	github.com/consensys/gnark-crypto v0.18.1
 	github.com/crate-crypto/go-kzg-4844 v1.0.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/ethereum-optimism/go-ethereum-hdwallet v0.1.3
@@ -44,12 +44,12 @@ require (
 	github.com/pkg/profile v1.7.0
 	github.com/prometheus/client_golang v1.20.5
 	github.com/protolambda/ctxlock v0.1.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/urfave/cli/v2 v2.27.5
-	golang.org/x/crypto v0.28.0
+	golang.org/x/crypto v0.35.0
 	golang.org/x/exp v0.0.0-20241009180824-f66d83c29e7c
-	golang.org/x/sync v0.8.0
-	golang.org/x/term v0.25.0
+	golang.org/x/sync v0.11.0
+	golang.org/x/term v0.29.0
 	golang.org/x/time v0.7.0
 )
 
@@ -63,7 +63,7 @@ require (
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/bits-and-blooms/bitset v1.13.0 // indirect
+	github.com/bits-and-blooms/bitset v1.20.0 // indirect
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/btcsuite/btcd/btcec/v2 v2.3.4 // indirect
 	github.com/btcsuite/btcd/btcutil v1.1.5 // indirect
@@ -74,7 +74,7 @@ require (
 	github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b // indirect
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
-	github.com/consensys/bavard v0.1.13 // indirect
+	github.com/consensys/bavard v0.1.31-0.20250406004941-2db259e4b582 // indirect
 	github.com/containerd/cgroups v1.1.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.5 // indirect
@@ -110,7 +110,7 @@ require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang-jwt/jwt/v4 v4.5.1 // indirect
+	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/google/pprof v0.0.0-20241009165004-a3522334989c // indirect
@@ -203,8 +203,8 @@ require (
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
-	github.com/quic-go/qpack v0.4.0 // indirect
-	github.com/quic-go/quic-go v0.46.0 // indirect
+	github.com/quic-go/qpack v0.5.1 // indirect
+	github.com/quic-go/quic-go v0.54.1 // indirect
 	github.com/quic-go/webtransport-go v0.8.0 // indirect
 	github.com/raulk/go-watchdog v1.3.0 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
@@ -230,13 +230,13 @@ require (
 	go.etcd.io/bbolt v1.3.5 // indirect
 	go.uber.org/dig v1.18.0 // indirect
 	go.uber.org/fx v1.22.2 // indirect
-	go.uber.org/mock v0.4.0 // indirect
+	go.uber.org/mock v0.5.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/mod v0.21.0 // indirect
 	golang.org/x/net v0.30.0 // indirect
-	golang.org/x/sys v0.26.0 // indirect
-	golang.org/x/text v0.19.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
+	golang.org/x/text v0.22.0 // indirect
 	golang.org/x/tools v0.26.0 // indirect
 	google.golang.org/genproto v0.0.0-20230726155614-23370e0ffb3e // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20230711160842-782d3b101e98 // indirect
@@ -251,6 +251,7 @@ require (
 )
 
 replace github.com/ethereum/go-ethereum v1.14.11 => github.com/ethereum-optimism/op-geth v1.101411.1-rc.6
+replace github.com/mholt/archiver => ./third_party/archiver
 
 //replace github.com/ethereum/go-ethereum => ../go-ethereum
 
