@@ -21,3 +21,5 @@
 !/op-alt-da
 !/go.mod
 !/go.sum
+!/third_party/archiver
+!/third_party/archiver/**

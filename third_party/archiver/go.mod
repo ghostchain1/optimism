@@ -1,6 +1,6 @@
 module github.com/mholt/archiver
 
-go 1.24.12
+go 1.23.0
 
 require (
 	github.com/dsnet/compress v0.0.1
