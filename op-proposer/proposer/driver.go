@@ -314,6 +314,11 @@ func (l *L2OutputSubmitter) FetchCurrentBlockNumber(ctx context.Context) (uint64
 
 	// Use either the finalized or safe head depending on the config. Finalized head is default & safer.
 	if l.Cfg.AllowNonFinalized {
+		// In interop-aware OP Stack versions, SafeL2 may represent the cross-safe head, while
+		// LocalSafeL2 tracks L1-anchored safety for a single chain.
+		if status.LocalSafeL2 != (eth.L2BlockRef{}) {
+			return status.LocalSafeL2.Number, nil
+		}
 		return status.SafeL2.Number, nil
 	}
 	return status.FinalizedL2.Number, nil
