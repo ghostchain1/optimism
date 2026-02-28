@@ -15,30 +15,18 @@ func TestLocator_Marshaling(t *testing.T) {
 		err  bool
 	}{
 		{
-			name: "valid tag",
-			in:   "tag://op-contracts/v1.6.0",
-			out: &Locator{
-				Tag: "op-contracts/v1.6.0",
-			},
-			err: false,
-		},
-		{
-			name: "well-formed but nonexistent tag",
-			in:   "tag://op-contracts/v1.5.0",
-			out:  nil,
-			err:  true,
-		},
-		{
-			name: "mal-formed tag",
-			in:   "tag://honk",
-			out:  nil,
-			err:  true,
-		},
-		{
 			name: "valid HTTPS URL",
 			in:   "https://example.com",
 			out: &Locator{
 				URL: parseUrl(t, "https://example.com"),
+			},
+			err: false,
+		},
+		{
+			name: "valid HTTP URL",
+			in:   "http://example.com",
+			out: &Locator{
+				URL: parseUrl(t, "http://example.com"),
 			},
 			err: false,
 		},
@@ -49,6 +37,14 @@ func TestLocator_Marshaling(t *testing.T) {
 				URL: parseUrl(t, "file:///tmp/artifacts"),
 			},
 			err: false,
+		},
+		{
+			name: "deprecated tag URL",
+			in:   "tag://op-contracts/v4.1.0",
+			out: &Locator{
+				URL: parseUrl(t, "tag://op-contracts/v4.1.0"),
+			},
+			err: true,
 		},
 		{
 			name: "empty",
@@ -64,9 +60,17 @@ func TestLocator_Marshaling(t *testing.T) {
 		},
 		{
 			name: "unsupported scheme",
-			in:   "http://example.com",
+			in:   "ftp://example.com",
 			out:  nil,
 			err:  true,
+		},
+		{
+			name: "embedded",
+			in:   "embedded",
+			out: &Locator{
+				URL: embeddedURL,
+			},
+			err: false,
 		},
 	}
 	for _, tt := range tests {
@@ -91,4 +95,40 @@ func parseUrl(t *testing.T, u string) *url.URL {
 	parsed, err := url.Parse(u)
 	require.NoError(t, err)
 	return parsed
+}
+
+func TestLocator_Equal(t *testing.T) {
+	tests := []struct {
+		a     *Locator
+		b     *Locator
+		equal bool
+	}{
+		{
+			MustNewLocatorFromURL("https://www.example.com"),
+			MustNewLocatorFromURL("http://www.example.com"),
+			false,
+		},
+		{
+			MustNewLocatorFromURL("http://www.example.com"),
+			MustNewLocatorFromURL("http://www.example.com"),
+			true,
+		},
+		{
+			MustNewFileLocator("/foo/bar"),
+			MustNewFileLocator("/foo/bar"),
+			true,
+		},
+		{
+			MustNewFileLocator("/foo/bar"),
+			MustNewFileLocator("/foo/baz"),
+			false,
+		},
+	}
+	for _, test := range tests {
+		if test.equal {
+			require.True(t, test.a.Equal(test.b), "%s != %s", test.a, test.b)
+		} else {
+			require.False(t, test.a.Equal(test.b), "%s == %s", test.a, test.b)
+		}
+	}
 }

@@ -1,39 +1,95 @@
 package artifacts
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
-
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 )
 
 type schemeUnmarshaler func(string) (*Locator, error)
 
 var schemeUnmarshalerDispatch = map[string]schemeUnmarshaler{
-	"tag":   unmarshalTag,
 	"file":  unmarshalURL,
+	"http":  unmarshalURL,
 	"https": unmarshalURL,
 }
 
-var DefaultL1ContractsLocator = &Locator{
-	Tag: standard.DefaultL1ContractsTag,
+func CreateHttpLocator(contentHash string) string {
+	return fmt.Sprintf("https://storage.googleapis.com/oplabs-contract-artifacts/artifacts-v1-%s.tar.gz", contentHash)
 }
 
-var DefaultL2ContractsLocator = &Locator{
-	Tag: standard.DefaultL2ContractsTag,
+const EmbeddedLocatorString = "embedded"
+
+var embeddedURL = &url.URL{
+	Scheme: EmbeddedLocatorString,
+}
+
+var EmbeddedLocator = &Locator{
+	URL: embeddedURL,
+}
+
+var DefaultL1ContractsLocator = EmbeddedLocator
+
+var DefaultL2ContractsLocator = EmbeddedLocator
+
+func NewLocatorFromURL(u string) (*Locator, error) {
+	if u == EmbeddedLocatorString {
+		return EmbeddedLocator, nil
+	}
+
+	parsedURL, err := url.Parse(u)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+	return &Locator{
+		URL: parsedURL,
+	}, nil
+}
+
+func MustNewLocatorFromURL(u string) *Locator {
+	loc, err := NewLocatorFromURL(u)
+	if err != nil {
+		panic(err)
+	}
+	return loc
+}
+
+func MustNewFileLocator(path string) *Locator {
+	loc, err := NewFileLocator(path)
+	if err != nil {
+		panic(err)
+	}
+	return loc
 }
 
 type Locator struct {
 	URL *url.URL
-	Tag string
+}
+
+func NewFileLocator(path string) (*Locator, error) {
+	u, err := url.Parse("file://" + path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse URL: %w", err)
+	}
+
+	return &Locator{URL: u}, nil
 }
 
 func (a *Locator) UnmarshalText(text []byte) error {
 	str := string(text)
 
+	if strings.HasPrefix(str, "tag://") {
+		return errors.New("tag:// locators are no longer supported - use embedded artifacts instead")
+	}
+
+	if str == "embedded" {
+		*a = *EmbeddedLocator
+		return nil
+	}
+
 	for scheme, unmarshaler := range schemeUnmarshalerDispatch {
-		if !strings.HasPrefix(str, scheme+"://") {
+		if !strings.HasPrefix(str, scheme+":") {
 			continue
 		}
 
@@ -46,36 +102,43 @@ func (a *Locator) UnmarshalText(text []byte) error {
 		return nil
 	}
 
-	return fmt.Errorf("unsupported scheme")
+	return fmt.Errorf("unsupported scheme %s", str)
 }
 
 func (a *Locator) MarshalText() ([]byte, error) {
-	if a.URL != nil {
-		return []byte(a.URL.String()), nil
+	if a.URL.String() == embeddedURL.String() || a.URL.String() == "" {
+		return []byte("embedded"), nil
 	}
 
-	if a.Tag != "" {
-		return []byte("tag://" + a.Tag), nil
-	}
-
-	return nil, fmt.Errorf("no URL, path or tag set")
+	return []byte(a.URL.String()), nil
 }
 
-func (a *Locator) IsTag() bool {
-	return a.Tag != ""
+func (a *Locator) MarshalTOML() ([]byte, error) {
+	if a.URL.String() == embeddedURL.String() || a.URL.String() == "" {
+		return []byte(`"embedded"`), nil
+	}
+	return []byte(`"` + a.URL.String() + `"`), nil
 }
 
-func unmarshalTag(tag string) (*Locator, error) {
-	tag = strings.TrimPrefix(tag, "tag://")
-	if !strings.HasPrefix(tag, "op-contracts/") {
-		return nil, fmt.Errorf("invalid tag: %s", tag)
+func (a *Locator) UnmarshalTOML(i interface{}) error {
+	switch v := i.(type) {
+	case string:
+		return a.UnmarshalText([]byte(v))
+	case []byte:
+		return a.UnmarshalText(v)
+	default:
+		return fmt.Errorf("unsupported type for TOML unmarshaling: %T", i)
 	}
+}
 
-	if _, err := standard.ArtifactsURLForTag(tag); err != nil {
-		return nil, err
-	}
+func (a *Locator) Equal(b *Locator) bool {
+	aStr, _ := a.MarshalText()
+	bStr, _ := b.MarshalText()
+	return string(aStr) == string(bStr)
+}
 
-	return &Locator{Tag: tag}, nil
+func (a *Locator) IsEmbedded() bool {
+	return a.URL.String() == embeddedURL.String()
 }
 
 func unmarshalURL(text string) (*Locator, error) {

@@ -8,10 +8,14 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 
+	"github.com/ethereum-optimism/optimism/op-core/forks"
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 )
+
+var ErrEngineResetReq = errors.New("cannot continue derivation until Engine has been reset")
 
 type Metrics interface {
 	RecordL1Ref(name string, ref eth.L1BlockRef)
@@ -46,7 +50,7 @@ type ChannelFlusher interface {
 }
 
 type ForkTransformer interface {
-	Transform(rollup.ForkName)
+	Transform(forks.Name)
 }
 
 type L2Source interface {
@@ -56,6 +60,12 @@ type L2Source interface {
 	L2BlockRefByHash(ctx context.Context, l2Hash common.Hash) (eth.L2BlockRef, error)
 	L2BlockRefByNumber(ctx context.Context, num uint64) (eth.L2BlockRef, error)
 	SystemConfigL2Fetcher
+}
+
+type l1TraversalStage interface {
+	NextBlockProvider
+	ResettableStage
+	AdvanceL1Block(ctx context.Context) error
 }
 
 // DerivationPipeline is updated with new L1 data, and the Step() function can be iterated on to generate attributes
@@ -73,7 +83,7 @@ type DerivationPipeline struct {
 	stages    []ResettableStage
 
 	// Special stages to keep track of
-	traversal *L1Traversal
+	traversal l1TraversalStage
 
 	attrib *AttributesQueue
 
@@ -87,19 +97,25 @@ type DerivationPipeline struct {
 }
 
 // NewDerivationPipeline creates a DerivationPipeline, to turn L1 data into L2 block-inputs.
-func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L1Fetcher, l1Blobs L1BlobsFetcher,
-	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics,
+func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, depSet DependencySet, l1Fetcher L1Fetcher, l1Blobs L1BlobsFetcher,
+	altDA AltDAInputFetcher, l2Source L2Source, metrics Metrics, managedBySupervisor bool, l1ChainConfig *params.ChainConfig,
 ) *DerivationPipeline {
 	spec := rollup.NewChainSpec(rollupCfg)
-	// Pull stages
-	l1Traversal := NewL1Traversal(log, rollupCfg, l1Fetcher)
+	// Stages are strung together into a pipeline,
+	// results are pulled from the stage closed to the L2 engine, which pulls from the previous stage, and so on.
+	var l1Traversal l1TraversalStage
+	if managedBySupervisor {
+		l1Traversal = NewL1TraversalManaged(log, rollupCfg, l1Fetcher)
+	} else {
+		l1Traversal = NewL1Traversal(log, rollupCfg, l1Fetcher)
+	}
 	dataSrc := NewDataSourceFactory(log, rollupCfg, l1Fetcher, l1Blobs, altDA) // auxiliary stage for L1Retrieval
 	l1Src := NewL1Retrieval(log, dataSrc, l1Traversal)
 	frameQueue := NewFrameQueue(log, rollupCfg, l1Src)
 	channelMux := NewChannelMux(log, spec, frameQueue, metrics)
 	chInReader := NewChannelInReader(rollupCfg, log, channelMux, metrics)
 	batchMux := NewBatchMux(log, rollupCfg, chInReader, l2Source)
-	attrBuilder := NewFetchingAttributesBuilder(rollupCfg, l1Fetcher, l2Source)
+	attrBuilder := NewFetchingAttributesBuilder(rollupCfg, l1ChainConfig, depSet, l1Fetcher, l2Source)
 	attributesQueue := NewAttributesQueue(log, rollupCfg, attrBuilder, batchMux)
 
 	// Reset from ResetEngine then up from L1 Traversal. The stages do not talk to each other during
@@ -124,7 +140,8 @@ func NewDerivationPipeline(log log.Logger, rollupCfg *rollup.Config, l1Fetcher L
 // DerivationReady returns true if the derivation pipeline is ready to be used.
 // When it's being reset its state is inconsistent, and should not be used externally.
 func (dp *DerivationPipeline) DerivationReady() bool {
-	return dp.engineIsReset && dp.resetting > 0
+	// Ready only when the engine has been confirmed reset and all stages finished resetting
+	return dp.engineIsReset && dp.resetting >= len(dp.stages)
 }
 
 func (dp *DerivationPipeline) Reset() {
@@ -163,7 +180,7 @@ func (dp *DerivationPipeline) Step(ctx context.Context, pendingSafeHead eth.L2Bl
 	// if any stages need to be reset, do that first.
 	if dp.resetting < len(dp.stages) {
 		if !dp.engineIsReset {
-			return nil, NewResetError(errors.New("cannot continue derivation until Engine has been reset"))
+			return nil, NewResetError(ErrEngineResetReq)
 		}
 
 		// After the Engine has been reset to ensure it is derived from the canonical L1 chain,
@@ -257,7 +274,7 @@ func (dp *DerivationPipeline) initialReset(ctx context.Context, resetL2Safe eth.
 
 func (db *DerivationPipeline) transformStages(oldOrigin, newOrigin eth.L1BlockRef) {
 	fork := db.rollupCfg.IsActivationBlock(oldOrigin.Time, newOrigin.Time)
-	if fork == "" {
+	if fork == forks.None {
 		return
 	}
 

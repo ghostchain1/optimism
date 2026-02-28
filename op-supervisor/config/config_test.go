@@ -9,7 +9,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/oppprof"
 	"github.com/ethereum-optimism/optimism/op-service/rpc"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/depset"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/backend/syncnode"
 )
 
 func TestDefaultConfigIsValid(t *testing.T) {
@@ -17,16 +17,16 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	require.NoError(t, cfg.Check())
 }
 
-func TestRequireL2RPC(t *testing.T) {
+func TestRequireSyncSources(t *testing.T) {
 	cfg := validConfig()
-	cfg.L2RPCs = []string{}
-	require.ErrorIs(t, cfg.Check(), ErrMissingL2RPC)
+	cfg.SyncSources = nil
+	require.ErrorIs(t, cfg.Check(), ErrMissingSyncSources)
 }
 
 func TestRequireDependencySet(t *testing.T) {
 	cfg := validConfig()
-	cfg.DependencySetSource = nil
-	require.ErrorIs(t, cfg.Check(), ErrMissingDependencySet)
+	cfg.FullConfigSetSource = nil
+	require.ErrorIs(t, cfg.Check(), ErrMissingFullConfigSet)
 }
 
 func TestRequireDatadir(t *testing.T) {
@@ -56,16 +56,6 @@ func TestValidateRPCConfig(t *testing.T) {
 }
 
 func validConfig() *Config {
-	depSet, err := depset.NewStaticConfigDependencySet(map[types.ChainID]*depset.StaticConfigDependency{
-		types.ChainIDFromUInt64(900): &depset.StaticConfigDependency{
-			ChainIndex:     900,
-			ActivationTime: 0,
-			HistoryMinTime: 0,
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
 	// Should be valid using only the required arguments passed in via the constructor.
-	return NewConfig([]string{"http://localhost:8545"}, depSet, "./supervisor_testdir")
+	return NewConfig("http://localhost:8545", &syncnode.CLISyncNodes{}, &depset.FullConfigSetSourceMerged{}, "./supervisor_testdir")
 }

@@ -1,4 +1,11 @@
-issues:
+# Build all Rust binaries (release) for sysgo tests.
+build-rust-release:
+  cd kona && cargo build --release --bin kona-node --bin kona-supervisor
+  cd op-rbuilder && cargo build --release -p op-rbuilder --bin op-rbuilder
+  cd rollup-boost && cargo build --release -p rollup-boost --bin rollup-boost
+
+# Checks that TODO comments have corresponding issues.
+todo-checker:
   ./ops/scripts/todo-checker.sh
 
 # Runs semgrep on the entire monorepo.
@@ -9,56 +16,32 @@ semgrep:
 semgrep-test:
   semgrep scan --test --config .semgrep/rules/ .semgrep/tests/
 
-lint-shellcheck:
+# Runs shellcheck.
+shellcheck:
   find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec sh -c 'echo "Checking $1"; shellcheck "$1"' _ {} \;
+  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec shfmt --diff {} \;
 
-install-foundry:
-  curl -L https://foundry.paradigm.xyz | bash && just update-foundry
+# Format shell scripts with shfmt.
+shfmt-fix:
+  find . -type f -name '*.sh' -not -path '*/node_modules/*' -not -path './packages/contracts-bedrock/lib/*' -not -path './packages/contracts-bedrock/kout*/*' -exec shfmt --write {} \;
 
-update-foundry:
-  bash ./ops/scripts/install-foundry.sh
+# Generates a table of contents for the README.md file.
+toc:
+  md_toc -p github README.md
 
-check-foundry:
-  bash ./ops/scripts/check-foundry.sh
+latest-versions:
+  ./ops/scripts/latest-versions.sh
 
-install-kontrol:
-  curl -L https://kframework.org/install | bash && just update-kontrol
-
-update-kontrol:
-  kup install kontrol --version v$(jq -r .kontrol < versions.json)
-
-install-abigen:
-  go install github.com/ethereum/go-ethereum/cmd/abigen@$(jq -r .abigen < versions.json)
-
-print-abigen:
-  abigen --version | sed -e 's/[^0-9]/ /g' -e 's/^ *//g' -e 's/ *$//g' -e 's/ /./g' -e 's/^/v/'
-
-check-abigen:
-  [[ $(just print-abigen) = $(cat versions.json | jq -r '.abigen') ]] && echo '✓ abigen versions match' || (echo '✗ abigen version mismatch. Run `just upgrade:abigen` to upgrade.' && exit 1)
-
-upgrade-abigen:
-  jq '.abigen = $v' --arg v $(just print:abigen) <<<$(cat versions.json) > versions.json
-
-install-slither:
-  pip3 install slither-analyzer==$(jq -r .slither < versions.json)
-
-print-slither:
-  slither --version
-
-check-slither:
-  [[ $(just print-slither) = $(jq -r .slither < versions.json) ]] && echo '✓ slither versions match' || (echo '✗ slither version mismatch. Run `just upgrade-slither` to upgrade.' && exit 1)
-
-upgrade-slither:
-  jq '.slither = $v' --arg v $(just print-slither) <<<$(cat versions.json) > versions.json
-
-install-semgrep:
-  pip3 install semgrep
-
-print-semgrep:
-  semgrep --version
-
-check-semgrep:
-  [ "$(just print-semgrep)" = "$(jq -r .semgrep < versions.json)" ] && echo '✓ semgrep versions match' || (echo '✗ semgrep version mismatch. Run `just upgrade-semgrep` to upgrade.' && exit 1)
-
-upgrade-semgrep:
-  jq '.semgrep = $v' --arg v $(just print-semgrep) <<<$(cat versions.json) > versions.json
+# Usage:
+#   just update-op-geth 2f0528b
+#   just update-op-geth v1.101602.4
+#   just update-op-geth optimism
+update-op-geth ref:
+	@ref="{{ref}}"; \
+	if [ -z "$ref" ]; then echo "error: provide a hash/tag/branch"; exit 1; fi; \
+	tmpl=$(printf "\173\173.Version\175\175"); \
+	ver=$(go list -m -f "$tmpl" github.com/ethereum-optimism/op-geth@"$ref"); \
+	if [ -z "$ver" ]; then echo "error: couldn't resolve $ref"; exit 1; fi; \
+	go mod edit -replace=github.com/ethereum/go-ethereum=github.com/ethereum-optimism/op-geth@"$ver"; \
+	go mod tidy; \
+	echo "Updated op-geth to $ver"

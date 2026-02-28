@@ -29,6 +29,7 @@ type gameMetadata struct {
 	Timestamp time.Time
 	Address   common.Address
 	Proposer  common.Address
+	Claim     common.Hash
 }
 
 type DisputeGameFactory struct {
@@ -40,6 +41,9 @@ type DisputeGameFactory struct {
 
 func NewDisputeGameFactory(addr common.Address, caller *batching.MultiCaller, networkTimeout time.Duration) *DisputeGameFactory {
 	factoryABI := snapshots.LoadDisputeGameFactoryABI()
+	// Note: Games might have different ABIs (eg SuperFaultDisputeGame) but since only a very small part of the ABI
+	// is actually needed, proposer always uses the latest FaultDisputeGameABI. Compatibility with other ABIs is tested
+	// in disputegamefactory_test.go
 	gameABI := snapshots.LoadFaultDisputeGameABI()
 	return &DisputeGameFactory{
 		caller:         caller,
@@ -62,35 +66,35 @@ func (f *DisputeGameFactory) Version(ctx context.Context) (string, error) {
 // HasProposedSince attempts to find a game with the specified game type created by the specified proposer after the
 // given cut off time. If one is found, returns true and the time the game was created at.
 // If no matching proposal is found, returns false, time.Time{}, nil
-func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, error) {
+func (f *DisputeGameFactory) HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, common.Hash, error) {
 	gameCount, err := f.gameCount(ctx)
 	if err != nil {
-		return false, time.Time{}, fmt.Errorf("failed to get dispute game count: %w", err)
+		return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get dispute game count: %w", err)
 	}
 	if gameCount == 0 {
-		return false, time.Time{}, nil
+		return false, time.Time{}, common.Hash{}, nil
 	}
 	for idx := gameCount - 1; ; idx-- {
 		game, err := f.gameAtIndex(ctx, idx)
 		if err != nil {
-			return false, time.Time{}, fmt.Errorf("failed to get dispute game %d: %w", idx, err)
+			return false, time.Time{}, common.Hash{}, fmt.Errorf("failed to get dispute game %d: %w", idx, err)
 		}
 		if game.Timestamp.Before(cutoff) {
 			// Reached a game that is before the expected cutoff, so we haven't found a suitable proposal
-			return false, time.Time{}, nil
+			return false, time.Time{}, common.Hash{}, nil
 		}
 		if game.GameType == gameType && game.Proposer == proposer {
 			// Found a matching proposal
-			return true, game.Timestamp, nil
+			return true, game.Timestamp, game.Claim, nil
 		}
 		if idx == 0 { // Need to check here rather than in the for condition to avoid underflow
 			// Checked every game and didn't find a match
-			return false, time.Time{}, nil
+			return false, time.Time{}, common.Hash{}, nil
 		}
 	}
 }
 
-func (f *DisputeGameFactory) ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, l2BlockNum uint64) (txmgr.TxCandidate, error) {
+func (f *DisputeGameFactory) ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, extraData []byte) (txmgr.TxCandidate, error) {
 	cCtx, cancel := context.WithTimeout(ctx, f.networkTimeout)
 	defer cancel()
 	result, err := f.caller.SingleCall(cCtx, rpcblock.Latest, f.contract.Call(methodInitBonds, gameType))
@@ -98,7 +102,7 @@ func (f *DisputeGameFactory) ProposalTx(ctx context.Context, gameType uint32, ou
 		return txmgr.TxCandidate{}, fmt.Errorf("failed to fetch init bond: %w", err)
 	}
 	initBond := result.GetBigInt(0)
-	call := f.contract.Call(methodCreateGame, gameType, outputRoot, common.BigToHash(big.NewInt(int64(l2BlockNum))).Bytes())
+	call := f.contract.Call(methodCreateGame, gameType, outputRoot, extraData)
 	candidate, err := call.ToTxCandidate()
 	if err != nil {
 		return txmgr.TxCandidate{}, err
@@ -135,13 +139,15 @@ func (f *DisputeGameFactory) gameAtIndex(ctx context.Context, idx uint64) (gameM
 	if err != nil {
 		return gameMetadata{}, fmt.Errorf("failed to load root claim of game %v: %w", idx, err)
 	}
-	// We don't need most of the claim data, only the claimant which is the game proposer
+	// We don't need most of the claim data, only the claim and the claimant which is the game proposer
 	claimant := result.GetAddress(2)
+	claim := result.GetHash(4)
 
 	return gameMetadata{
 		GameType:  gameType,
 		Timestamp: time.Unix(int64(timestamp), 0),
 		Address:   address,
 		Proposer:  claimant,
+		Claim:     claim,
 	}, nil
 }

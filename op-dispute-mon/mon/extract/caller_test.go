@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum-optimism/optimism/packages/contracts-bedrock/snapshots"
 	"github.com/ethereum/go-ethereum/common"
 
-	faultTypes "github.com/ethereum-optimism/optimism/op-challenger/game/fault/types"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/types"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
 	batchingTest "github.com/ethereum-optimism/optimism/op-service/sources/batching/test"
@@ -29,35 +28,47 @@ func TestMetadataCreator_CreateContract(t *testing.T) {
 	}{
 		{
 			name: "validCannonGameType",
-			game: types.GameMetadata{GameType: uint32(faultTypes.CannonGameType), Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(types.CannonGameType), Proxy: fdgAddr},
 		},
 		{
 			name: "validPermissionedGameType",
-			game: types.GameMetadata{GameType: uint32(faultTypes.PermissionedGameType), Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(types.PermissionedGameType), Proxy: fdgAddr},
 		},
 		{
-			name: "validAsteriscGameType",
-			game: types.GameMetadata{GameType: uint32(faultTypes.AsteriscGameType), Proxy: fdgAddr},
+			name: "validCannonKonaGameType",
+			game: types.GameMetadata{GameType: uint32(types.CannonKonaGameType), Proxy: fdgAddr},
 		},
 		{
 			name: "validAlphabetGameType",
-			game: types.GameMetadata{GameType: uint32(faultTypes.AlphabetGameType), Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(types.AlphabetGameType), Proxy: fdgAddr},
 		},
 		{
 			name: "validFastGameType",
-			game: types.GameMetadata{GameType: uint32(faultTypes.FastGameType), Proxy: fdgAddr},
+			game: types.GameMetadata{GameType: uint32(types.FastGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validSuperCannonGameType",
+			game: types.GameMetadata{GameType: uint32(types.SuperCannonGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validSuperPermissionedGameType",
+			game: types.GameMetadata{GameType: uint32(types.SuperPermissionedGameType), Proxy: fdgAddr},
+		},
+		{
+			name: "validSuperCannonKonaGameType",
+			game: types.GameMetadata{GameType: uint32(types.SuperCannonKonaGameType), Proxy: fdgAddr},
 		},
 		{
 			name:        "InvalidGameType",
-			game:        types.GameMetadata{GameType: 3, Proxy: fdgAddr},
-			expectedErr: fmt.Errorf("unsupported game type: 3"),
+			game:        types.GameMetadata{GameType: 6, Proxy: fdgAddr},
+			expectedErr: fmt.Errorf("unsupported game type: 6"),
 		},
 	}
 
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			caller, metrics := setupMetadataLoaderTest(t)
+			caller, metrics := setupMetadataLoaderTest(t, test.game.GameType)
 			creator := NewGameCallerCreator(metrics, caller)
 			_, err := creator.CreateContract(context.Background(), test.game)
 			require.Equal(t, test.expectedErr, err)
@@ -75,11 +86,17 @@ func TestMetadataCreator_CreateContract(t *testing.T) {
 	}
 }
 
-func setupMetadataLoaderTest(t *testing.T) (*batching.MultiCaller, *mockCacheMetrics) {
+func setupMetadataLoaderTest(t *testing.T, gameType uint32) (*batching.MultiCaller, *mockCacheMetrics) {
 	fdgAbi := snapshots.LoadFaultDisputeGameABI()
+	if gameType == uint32(types.SuperPermissionedGameType) ||
+		gameType == uint32(types.SuperCannonGameType) ||
+		gameType == uint32(types.SuperCannonKonaGameType) {
+		fdgAbi = snapshots.LoadSuperFaultDisputeGameABI()
+	}
 	stubRpc := batchingTest.NewAbiBasedRpc(t, fdgAddr, fdgAbi)
 	caller := batching.NewMultiCaller(stubRpc, batching.DefaultBatchSize)
 	stubRpc.SetResponse(fdgAddr, "version", rpcblock.Latest, nil, []interface{}{"0.18.0"})
+	stubRpc.SetResponse(fdgAddr, "gameType", rpcblock.Latest, nil, []interface{}{gameType})
 	return caller, &mockCacheMetrics{}
 }
 

@@ -2,16 +2,18 @@
 pragma solidity 0.8.15;
 
 // Contracts
+import { ProxyAdminOwnedBase } from "src/L1/ProxyAdminOwnedBase.sol";
+import { ReinitializableBase } from "src/universal/ReinitializableBase.sol";
 import { StandardBridge } from "src/universal/StandardBridge.sol";
 
 // Libraries
 import { Predeploys } from "src/libraries/Predeploys.sol";
 
 // Interfaces
-import { ISemver } from "src/universal/interfaces/ISemver.sol";
-import { ICrossDomainMessenger } from "src/universal/interfaces/ICrossDomainMessenger.sol";
-import { ISuperchainConfig } from "src/L1/interfaces/ISuperchainConfig.sol";
-import { ISystemConfig } from "src/L1/interfaces/ISystemConfig.sol";
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { ICrossDomainMessenger } from "interfaces/universal/ICrossDomainMessenger.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
 
 /// @custom:proxied true
 /// @title L1StandardBridge
@@ -23,7 +25,7 @@ import { ISystemConfig } from "src/L1/interfaces/ISystemConfig.sol";
 ///         NOTE: this contract is not intended to support all variations of ERC20 tokens. Examples
 ///         of some token types that may not be properly supported by this contract include, but are
 ///         not limited to: tokens with transfer fees, rebasing tokens, and tokens with blocklists.
-contract L1StandardBridge is StandardBridge, ISemver {
+contract L1StandardBridge is StandardBridge, ProxyAdminOwnedBase, ReinitializableBase, ISemver {
     /// @custom:legacy
     /// @notice Emitted whenever a deposit of ETH from L1 into L2 is initiated.
     /// @param from      Address of the depositor.
@@ -75,36 +77,41 @@ contract L1StandardBridge is StandardBridge, ISemver {
     );
 
     /// @notice Semantic version.
-    /// @custom:semver 2.2.1-beta.2
-    string public constant version = "2.2.1-beta.2";
+    /// @custom:semver 2.8.0
+    string public constant version = "2.8.0";
 
-    /// @notice Address of the SuperchainConfig contract.
-    ISuperchainConfig public superchainConfig;
+    /// @custom:legacy
+    /// @custom:spacer superchainConfig
+    /// @notice Spacer taking up the legacy `superchainConfig` slot.
+    address private spacer_50_0_20;
+
+    /// @custom:legacy
+    /// @custom:spacer systemConfig
+    /// @notice Spacer taking up the legacy `systemConfig` slot.
+    address private spacer_51_0_20;
 
     /// @notice Address of the SystemConfig contract.
     ISystemConfig public systemConfig;
 
     /// @notice Constructs the L1StandardBridge contract.
-    constructor() StandardBridge() {
-        initialize({
-            _messenger: ICrossDomainMessenger(address(0)),
-            _superchainConfig: ISuperchainConfig(address(0)),
-            _systemConfig: ISystemConfig(address(0))
-        });
+    constructor() StandardBridge() ReinitializableBase(3) {
+        _disableInitializers();
     }
 
     /// @notice Initializer.
     /// @param _messenger        Contract for the CrossDomainMessenger on this network.
-    /// @param _superchainConfig Contract for the SuperchainConfig on this network.
+    /// @param _systemConfig Contract for the SystemConfig on this network.
     function initialize(
         ICrossDomainMessenger _messenger,
-        ISuperchainConfig _superchainConfig,
         ISystemConfig _systemConfig
     )
-        public
-        initializer
+        external
+        reinitializer(initVersion())
     {
-        superchainConfig = _superchainConfig;
+        // Initialization transactions must come from the ProxyAdmin or its owner.
+        _assertOnlyProxyAdminOrProxyAdminOwner();
+
+        // Now perform initialization logic.
         systemConfig = _systemConfig;
         __StandardBridge_init({
             _messenger: _messenger,
@@ -114,17 +121,18 @@ contract L1StandardBridge is StandardBridge, ISemver {
 
     /// @inheritdoc StandardBridge
     function paused() public view override returns (bool) {
-        return superchainConfig.paused();
+        return systemConfig.paused();
+    }
+
+    /// @notice Returns the SuperchainConfig contract.
+    /// @return ISuperchainConfig The SuperchainConfig contract.
+    function superchainConfig() public view returns (ISuperchainConfig) {
+        return systemConfig.superchainConfig();
     }
 
     /// @notice Allows EOAs to bridge ETH by sending directly to the bridge.
     receive() external payable override onlyEOA {
         _initiateETHDeposit(msg.sender, msg.sender, RECEIVE_DEFAULT_GAS_LIMIT, bytes(""));
-    }
-
-    /// @inheritdoc StandardBridge
-    function gasPayingToken() internal view override returns (address addr_, uint8 decimals_) {
-        (addr_, decimals_) = systemConfig.gasPayingToken();
     }
 
     /// @custom:legacy

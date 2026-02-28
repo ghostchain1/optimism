@@ -4,7 +4,6 @@ import (
 	"github.com/ethereum-optimism/optimism/op-e2e/config"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils"
 	"github.com/ethereum-optimism/optimism/op-node/node/safedb"
-	"github.com/ethereum-optimism/optimism/op-node/rollup/interop"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
 	"github.com/ethereum/go-ethereum/node"
@@ -16,7 +15,7 @@ func DefaultRollupTestParams() *e2eutils.TestParams {
 		MaxSequencerDrift:   40,
 		SequencerWindowSize: 120,
 		ChannelTimeout:      120,
-		L1BlockTime:         15,
+		L1BlockTime:         12, // Many of the action helpers assume a 12s L1 block time
 		AllocType:           config.DefaultAllocType,
 	}
 }
@@ -25,7 +24,6 @@ var DefaultAlloc = &e2eutils.AllocParams{PrefundTestUsers: true}
 
 type VerifierCfg struct {
 	SafeHeadListener safeDB
-	InteropBackend   interop.InteropBackend
 }
 
 type VerifierOpt func(opts *VerifierCfg)
@@ -33,12 +31,6 @@ type VerifierOpt func(opts *VerifierCfg)
 func WithSafeHeadListener(l safeDB) VerifierOpt {
 	return func(opts *VerifierCfg) {
 		opts.SafeHeadListener = l
-	}
-}
-
-func WithInteropBackend(b interop.InteropBackend) VerifierOpt {
-	return func(opts *VerifierCfg) {
-		opts.InteropBackend = b
 	}
 }
 

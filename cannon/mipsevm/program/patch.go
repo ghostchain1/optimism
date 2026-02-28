@@ -2,58 +2,15 @@ package program
 
 import (
 	"bytes"
-	"debug/elf"
 	"errors"
-	"fmt"
 
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm"
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/arch"
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/memory"
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/register"
 )
 
 const WordSizeBytes = arch.WordSizeBytes
-
-// PatchGoGC patches out garbage-collection-related symbols to disable garbage collection
-// and improves performance by patching out floating-point-related symbols
-func PatchGoGC(f *elf.File, st mipsevm.FPVMState) error {
-	symbols, err := f.Symbols()
-	if err != nil {
-		return fmt.Errorf("failed to read symbols data, cannot patch program: %w", err)
-	}
-
-	for _, s := range symbols {
-		// Disable Golang GC by patching the functions that enable the GC to a no-op function.
-		switch s.Name {
-		case "runtime.gcenable",
-			"runtime.init.5",            // patch out: init() { go forcegchelper() }
-			"runtime.main.func1",        // patch out: main.func() { newm(sysmon, ....) }
-			"runtime.deductSweepCredit", // uses floating point nums and interacts with gc we disabled
-			"runtime.(*gcControllerState).commit",
-			// these prometheus packages rely on concurrent background things. We cannot run those.
-			"github.com/prometheus/client_golang/prometheus.init",
-			"github.com/prometheus/client_golang/prometheus.init.0",
-			"github.com/prometheus/procfs.init",
-			"github.com/prometheus/common/model.init",
-			"github.com/prometheus/client_model/go.init",
-			"github.com/prometheus/client_model/go.init.0",
-			"github.com/prometheus/client_model/go.init.1",
-			// skip flag pkg init, we need to debug arg-processing more to see why this fails
-			"flag.init",
-			// We need to patch this out, we don't pass float64nan because we don't support floats
-			"runtime.check":
-			// MIPSx patch: ret (pseudo instruction)
-			// 03e00008 = jr $ra = ret (pseudo instruction)
-			// 00000000 = nop (executes with delay-slot, but does nothing)
-			if err := st.GetMemory().SetMemoryRange(Word(s.Value), bytes.NewReader([]byte{
-				0x03, 0xe0, 0x00, 0x08,
-				0, 0, 0, 0,
-			})); err != nil {
-				return fmt.Errorf("failed to patch Go runtime.gcenable: %w", err)
-			}
-		}
-	}
-	return nil
-}
 
 // PatchStack sets up the program's initial stack frame and stack pointer
 func PatchStack(st mipsevm.FPVMState) error {
@@ -63,7 +20,7 @@ func PatchStack(st mipsevm.FPVMState) error {
 	if err := st.GetMemory().SetMemoryRange(sp-4*memory.PageSize, bytes.NewReader(make([]byte, 5*memory.PageSize))); err != nil {
 		return errors.New("failed to allocate page for stack content")
 	}
-	st.GetRegistersRef()[29] = sp
+	st.GetRegistersRef()[register.RegSP] = sp
 
 	storeMem := func(addr Word, v Word) {
 		var dat [WordSizeBytes]byte

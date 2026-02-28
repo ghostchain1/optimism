@@ -1,23 +1,24 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.15;
+pragma solidity 0.8.25;
 
-// Testing utilities
-import { CommonTest } from "test/setup/CommonTest.sol";
+// Testing
+import { Test } from "test/setup/Test.sol";
 
 // Libraries
 import { Predeploys } from "src/libraries/Predeploys.sol";
-import { IL2ToL2CrossDomainMessenger } from "src/L2/interfaces/IL2ToL2CrossDomainMessenger.sol";
+import { IL2ToL2CrossDomainMessenger } from "interfaces/L2/IL2ToL2CrossDomainMessenger.sol";
 
 // Target contract
-import { ISuperchainTokenBridge } from "src/L2/interfaces/ISuperchainTokenBridge.sol";
-import { ISuperchainERC20 } from "src/L2/interfaces/ISuperchainERC20.sol";
-import { IOptimismSuperchainERC20Factory } from "src/L2/interfaces/IOptimismSuperchainERC20Factory.sol";
+import { SuperchainTokenBridge } from "src/L2/SuperchainTokenBridge.sol";
+import { ISuperchainTokenBridge } from "interfaces/L2/ISuperchainTokenBridge.sol";
+import { ISuperchainERC20 } from "interfaces/L2/ISuperchainERC20.sol";
 import { IERC20 } from "@openzeppelin/contracts/interfaces/IERC20.sol";
-import { IERC7802 } from "src/L2/interfaces/IERC7802.sol";
+import { IERC7802 } from "interfaces/L2/IERC7802.sol";
+import { MockSuperchainERC20Implementation } from "test/mocks/SuperchainERC20Implementation.sol";
 
-/// @title SuperchainTokenBridgeTest
-/// @notice Contract for testing the SuperchainTokenBridge contract.
-contract SuperchainTokenBridgeTest is CommonTest {
+/// @title SuperchainTokenBridge_TestInit
+/// @notice Reusable test initialization for `SuperchainTokenBridge` tests.
+abstract contract SuperchainTokenBridge_TestInit is Test {
     address internal constant ZERO_ADDRESS = address(0);
     string internal constant NAME = "SuperchainERC20";
     string internal constant SYMBOL = "OSE";
@@ -32,17 +33,20 @@ contract SuperchainTokenBridgeTest is CommonTest {
     event RelayERC20(address indexed token, address indexed from, address indexed to, uint256 amount, uint256 source);
 
     ISuperchainERC20 public superchainERC20;
+    ISuperchainTokenBridge public superchainTokenBridge;
 
     /// @notice Sets up the test suite.
-    function setUp() public override {
-        super.enableInterop();
-        super.setUp();
+    function setUp() public {
+        vm.etch(Predeploys.SUPERCHAIN_TOKEN_BRIDGE, address(new SuperchainTokenBridge()).code);
+        superchainTokenBridge = ISuperchainTokenBridge(Predeploys.SUPERCHAIN_TOKEN_BRIDGE);
+        superchainERC20 = ISuperchainERC20(address(new MockSuperchainERC20Implementation()));
 
-        superchainERC20 = ISuperchainERC20(
-            IOptimismSuperchainERC20Factory(Predeploys.OPTIMISM_SUPERCHAIN_ERC20_FACTORY).deploy(
-                REMOTE_TOKEN, NAME, SYMBOL, 18
-            )
-        );
+        // Skip the initialization until OptimismSuperchainERC20Factory is integrated again
+        // superchainERC20 = ISuperchainERC20(
+        //     IOptimismSuperchainERC20Factory(Predeploys.OPTIMISM_SUPERCHAIN_ERC20_FACTORY).deploy(
+        //         REMOTE_TOKEN, NAME, SYMBOL, 18
+        //     )
+        // );
     }
 
     /// @notice Helper function to setup a mock and expect a call to it.
@@ -50,7 +54,11 @@ contract SuperchainTokenBridgeTest is CommonTest {
         vm.mockCall(_receiver, _calldata, _returned);
         vm.expectCall(_receiver, _calldata);
     }
+}
 
+/// @title SuperchainTokenBridge_SendERC20_Test
+/// @notice Tests the `sendERC20` function of the `SuperchainTokenBridge` contract.
+contract SuperchainTokenBridge_SendERC20_Test is SuperchainTokenBridge_TestInit {
     /// @notice Tests the `sendERC20` function reverts when the address `_to` is zero.
     function testFuzz_sendERC20_zeroAddressTo_reverts(address _sender, uint256 _amount, uint256 _chainId) public {
         // Expect the revert with `ZeroAddress` selector
@@ -61,7 +69,8 @@ contract SuperchainTokenBridgeTest is CommonTest {
         superchainTokenBridge.sendERC20(address(superchainERC20), ZERO_ADDRESS, _amount, _chainId);
     }
 
-    /// @notice Tests the `sendERC20` function reverts when the `token` does not support the IERC7802 interface.
+    /// @notice Tests the `sendERC20` function reverts when the `token` does not support the
+    ///         IERC7802 interface.
     function testFuzz_sendERC20_notSupportedIERC7802_reverts(
         address _token,
         address _sender,
@@ -87,8 +96,8 @@ contract SuperchainTokenBridgeTest is CommonTest {
         superchainTokenBridge.sendERC20(_token, _to, _amount, _chainId);
     }
 
-    /// @notice Tests the `sendERC20` function burns the sender tokens, sends the message, and emits the `SendERC20`
-    /// event.
+    /// @notice Tests the `sendERC20` function burns the sender tokens, sends the message, and
+    ///         emits the `SendERC20` event.
     function testFuzz_sendERC20_succeeds(
         address _sender,
         address _to,
@@ -106,7 +115,8 @@ contract SuperchainTokenBridgeTest is CommonTest {
         vm.prank(Predeploys.SUPERCHAIN_TOKEN_BRIDGE);
         superchainERC20.crosschainMint(_sender, _amount);
 
-        // Get the total supply and balance of `_sender` before the send to compare later on the assertions
+        // Get the total supply and balance of `_sender` before the send to compare later on the
+        // assertions
         uint256 _totalSupplyBefore = IERC20(address(superchainERC20)).totalSupply();
         uint256 _senderBalanceBefore = IERC20(address(superchainERC20)).balanceOf(_sender);
 
@@ -140,8 +150,13 @@ contract SuperchainTokenBridgeTest is CommonTest {
         assertEq(IERC20(address(superchainERC20)).totalSupply(), _totalSupplyBefore - _amount);
         assertEq(IERC20(address(superchainERC20)).balanceOf(_sender), _senderBalanceBefore - _amount);
     }
+}
 
-    /// @notice Tests the `relayERC20` function reverts when the caller is not the L2ToL2CrossDomainMessenger.
+/// @title SuperchainTokenBridge_RelayERC20_Test
+/// @notice Tests the `relayERC20` function of the `SuperchainTokenBridge` contract.
+contract SuperchainTokenBridge_RelayERC20_Test is SuperchainTokenBridge_TestInit {
+    /// @notice Tests the `relayERC20` function reverts when the caller is not the
+    ///         `L2ToL2CrossDomainMessenger`.
     function testFuzz_relayERC20_notMessenger_reverts(
         address _token,
         address _caller,
@@ -161,8 +176,8 @@ contract SuperchainTokenBridgeTest is CommonTest {
         superchainTokenBridge.relayERC20(_token, _caller, _to, _amount);
     }
 
-    /// @notice Tests the `relayERC20` function reverts when the `crossDomainMessageSender` that sent the message is not
-    /// the same SuperchainTokenBridge.
+    /// @notice Tests the `relayERC20` function reverts when the `crossDomainMessageSender` that
+    ///         sent the message is not the same `SuperchainTokenBridge`.
     function testFuzz_relayERC20_notCrossDomainSender_reverts(
         address _crossDomainMessageSender,
         uint256 _source,
@@ -192,14 +207,16 @@ contract SuperchainTokenBridgeTest is CommonTest {
     function testFuzz_relayERC20_succeeds(address _from, address _to, uint256 _amount, uint256 _source) public {
         vm.assume(_to != ZERO_ADDRESS);
 
-        // Mock the call over the `crossDomainMessageContext` function setting the same address as value
+        // Mock the call over the `crossDomainMessageContext` function setting the same address as
+        // value
         _mockAndExpect(
             Predeploys.L2_TO_L2_CROSS_DOMAIN_MESSENGER,
             abi.encodeCall(IL2ToL2CrossDomainMessenger.crossDomainMessageContext, ()),
             abi.encode(address(superchainTokenBridge), _source)
         );
 
-        // Get the total supply and balance of `_to` before the relay to compare later on the assertions
+        // Get the total supply and balance of `_to` before the relay to compare later on the
+        // assertions
         uint256 _totalSupplyBefore = IERC20(address(superchainERC20)).totalSupply();
         uint256 _toBalanceBefore = IERC20(address(superchainERC20)).balanceOf(_to);
 

@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
+	"github.com/ethereum-optimism/optimism/op-node/rollup/derive/params"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -60,6 +61,7 @@ type ChannelOut interface {
 	FullErr() error
 	Close() error
 	OutputFrame(*bytes.Buffer, uint64) (uint16, error)
+	DiscardCompressor()
 }
 
 type SingularChannelOut struct {
@@ -75,6 +77,10 @@ type SingularChannelOut struct {
 	closed bool
 
 	chainSpec *rollup.ChainSpec
+}
+
+func (co *SingularChannelOut) DiscardCompressor() {
+	co.compress = nil
 }
 
 func (co *SingularChannelOut) ID() ChannelID {
@@ -275,7 +281,7 @@ func ForceCloseTxData(frames []Frame) ([]byte, error) {
 	}
 
 	var out bytes.Buffer
-	out.WriteByte(DerivationVersion0)
+	out.WriteByte(params.DerivationVersion0)
 
 	if !closed {
 		f := Frame{

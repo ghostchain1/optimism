@@ -8,12 +8,12 @@ import (
 
 	op_e2e "github.com/ethereum-optimism/optimism/op-e2e"
 
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
 	legacybindings "github.com/ethereum-optimism/optimism/op-e2e/bindings"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/geth"
 	"github.com/ethereum-optimism/optimism/op-e2e/e2eutils/wait"
 	"github.com/ethereum-optimism/optimism/op-e2e/system/e2esys"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +40,7 @@ func TestGasPriceOracleFeeUpdates(t *testing.T) {
 	l1Client := sys.NodeClient("l1")
 	l2Seq := sys.NodeClient("sequencer")
 	// l2Verif := sys.NodeClient("verifier")
-	ethPrivKey := cfg.Secrets.SysCfgOwner
+	ethPrivKey := cfg.Secrets.Deployer
 
 	// Bind to the SystemConfig & GasPriceOracle contracts
 	sysconfig, err := legacybindings.NewSystemConfig(cfg.L1Deployments.SystemConfigProxy, l1Client)

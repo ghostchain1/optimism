@@ -1,244 +1,29 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.15;
 
-import { Test, stdStorage, StdStorage } from "forge-std/Test.sol";
+// Testing
+import { Test } from "test/setup/Test.sol";
+import { stdStorage, StdStorage } from "forge-std/StdStorage.sol";
+import "../setup/FeatureFlags.sol";
+
+// Libraries
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
+import { Chains } from "scripts/libraries/Chains.sol";
+import { StandardConstants } from "scripts/deploy/StandardConstants.sol";
+import { DevFeatures } from "src/libraries/DevFeatures.sol";
 
-import { IDelayedWETH } from "src/dispute/interfaces/IDelayedWETH.sol";
-import { IPreimageOracle } from "src/cannon/interfaces/IPreimageOracle.sol";
-import { IMIPS } from "src/cannon/interfaces/IMIPS.sol";
-import { IDisputeGameFactory } from "src/dispute/interfaces/IDisputeGameFactory.sol";
+// Interfaces
+import { ISuperchainConfig } from "interfaces/L1/ISuperchainConfig.sol";
+import { IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
+import { IProxyAdmin } from "interfaces/universal/IProxyAdmin.sol";
+import { IProxy } from "interfaces/universal/IProxy.sol";
 
-import { ISuperchainConfig } from "src/L1/interfaces/ISuperchainConfig.sol";
-import { IProtocolVersions } from "src/L1/interfaces/IProtocolVersions.sol";
-import { OPContractsManager } from "src/L1/OPContractsManager.sol";
-import { IOptimismPortal2 } from "src/L1/interfaces/IOptimismPortal2.sol";
-import { ISystemConfig } from "src/L1/interfaces/ISystemConfig.sol";
-import { IL1CrossDomainMessenger } from "src/L1/interfaces/IL1CrossDomainMessenger.sol";
-import { IL1ERC721Bridge } from "src/L1/interfaces/IL1ERC721Bridge.sol";
-import { IL1StandardBridge } from "src/L1/interfaces/IL1StandardBridge.sol";
-import { IOptimismMintableERC20Factory } from "src/universal/interfaces/IOptimismMintableERC20Factory.sol";
-import { IProxyAdmin } from "src/universal/interfaces/IProxyAdmin.sol";
-import { IProxy } from "src/universal/interfaces/IProxy.sol";
+import { DeployImplementations } from "scripts/deploy/DeployImplementations.s.sol";
 
-import {
-    DeployImplementationsInput,
-    DeployImplementations,
-    DeployImplementationsInterop,
-    DeployImplementationsOutput
-} from "scripts/deploy/DeployImplementations.s.sol";
-
-contract DeployImplementationsInput_Test is Test {
-    DeployImplementationsInput dii;
-
-    uint256 withdrawalDelaySeconds = 100;
-    uint256 minProposalSizeBytes = 200;
-    uint256 challengePeriodSeconds = 300;
-    uint256 proofMaturityDelaySeconds = 400;
-    uint256 disputeGameFinalityDelaySeconds = 500;
-    string release = "dev-release"; // this means implementation contracts will be deployed
-    ISuperchainConfig superchainConfigProxy = ISuperchainConfig(makeAddr("superchainConfigProxy"));
-    IProtocolVersions protocolVersionsProxy = IProtocolVersions(makeAddr("protocolVersionsProxy"));
-
-    function setUp() public {
-        dii = new DeployImplementationsInput();
-    }
-
-    function test_getters_whenNotSet_reverts() public {
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.withdrawalDelaySeconds();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.minProposalSizeBytes();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.challengePeriodSeconds();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.proofMaturityDelaySeconds();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.disputeGameFinalityDelaySeconds();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.release();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.superchainConfigProxy();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.protocolVersionsProxy();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.opcmProxyOwner();
-
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.standardVersionsToml();
-    }
-
-    function test_opcmProxyOwner_whenNotSet_reverts() public {
-        vm.expectRevert("DeployImplementationsInput: not set");
-        dii.opcmProxyOwner();
-    }
-
-    function test_opcmProxyOwner_succeeds() public {
-        dii.set(dii.opcmProxyOwner.selector, address(msg.sender));
-        address opcmProxyOwner = dii.opcmProxyOwner();
-        assertEq(address(msg.sender), address(opcmProxyOwner), "100");
-    }
-}
-
-contract DeployImplementationsOutput_Test is Test {
-    DeployImplementationsOutput dio;
-
-    function setUp() public {
-        dio = new DeployImplementationsOutput();
-    }
-
-    function test_set_succeeds() public {
-        IProxy proxy = IProxy(
-            DeployUtils.create1({
-                _name: "Proxy",
-                _args: DeployUtils.encodeConstructor(abi.encodeCall(IProxy.__constructor__, (address(0))))
-            })
-        );
-        address opcmImpl = address(makeAddr("opcmImpl"));
-        vm.prank(address(0));
-        proxy.upgradeTo(opcmImpl);
-
-        OPContractsManager opcmProxy = OPContractsManager(address(proxy));
-        IOptimismPortal2 optimismPortalImpl = IOptimismPortal2(payable(makeAddr("optimismPortalImpl")));
-        IDelayedWETH delayedWETHImpl = IDelayedWETH(payable(makeAddr("delayedWETHImpl")));
-        IPreimageOracle preimageOracleSingleton = IPreimageOracle(makeAddr("preimageOracleSingleton"));
-        IMIPS mipsSingleton = IMIPS(makeAddr("mipsSingleton"));
-        ISystemConfig systemConfigImpl = ISystemConfig(makeAddr("systemConfigImpl"));
-        IL1CrossDomainMessenger l1CrossDomainMessengerImpl =
-            IL1CrossDomainMessenger(makeAddr("l1CrossDomainMessengerImpl"));
-        IL1ERC721Bridge l1ERC721BridgeImpl = IL1ERC721Bridge(makeAddr("l1ERC721BridgeImpl"));
-        IL1StandardBridge l1StandardBridgeImpl = IL1StandardBridge(payable(makeAddr("l1StandardBridgeImpl")));
-        IOptimismMintableERC20Factory optimismMintableERC20FactoryImpl =
-            IOptimismMintableERC20Factory(makeAddr("optimismMintableERC20FactoryImpl"));
-        IDisputeGameFactory disputeGameFactoryImpl = IDisputeGameFactory(makeAddr("disputeGameFactoryImpl"));
-
-        vm.etch(address(opcmProxy), address(opcmProxy).code);
-        vm.etch(address(opcmImpl), hex"01");
-        vm.etch(address(optimismPortalImpl), hex"01");
-        vm.etch(address(delayedWETHImpl), hex"01");
-        vm.etch(address(preimageOracleSingleton), hex"01");
-        vm.etch(address(mipsSingleton), hex"01");
-        vm.etch(address(systemConfigImpl), hex"01");
-        vm.etch(address(l1CrossDomainMessengerImpl), hex"01");
-        vm.etch(address(l1ERC721BridgeImpl), hex"01");
-        vm.etch(address(l1StandardBridgeImpl), hex"01");
-        vm.etch(address(optimismMintableERC20FactoryImpl), hex"01");
-        vm.etch(address(disputeGameFactoryImpl), hex"01");
-        dio.set(dio.opcmProxy.selector, address(opcmProxy));
-        dio.set(dio.optimismPortalImpl.selector, address(optimismPortalImpl));
-        dio.set(dio.delayedWETHImpl.selector, address(delayedWETHImpl));
-        dio.set(dio.preimageOracleSingleton.selector, address(preimageOracleSingleton));
-        dio.set(dio.mipsSingleton.selector, address(mipsSingleton));
-        dio.set(dio.systemConfigImpl.selector, address(systemConfigImpl));
-        dio.set(dio.l1CrossDomainMessengerImpl.selector, address(l1CrossDomainMessengerImpl));
-        dio.set(dio.l1ERC721BridgeImpl.selector, address(l1ERC721BridgeImpl));
-        dio.set(dio.l1StandardBridgeImpl.selector, address(l1StandardBridgeImpl));
-        dio.set(dio.optimismMintableERC20FactoryImpl.selector, address(optimismMintableERC20FactoryImpl));
-        dio.set(dio.disputeGameFactoryImpl.selector, address(disputeGameFactoryImpl));
-
-        assertEq(address(opcmProxy), address(dio.opcmProxy()), "50");
-        assertEq(address(optimismPortalImpl), address(dio.optimismPortalImpl()), "100");
-        assertEq(address(delayedWETHImpl), address(dio.delayedWETHImpl()), "200");
-        assertEq(address(preimageOracleSingleton), address(dio.preimageOracleSingleton()), "300");
-        assertEq(address(mipsSingleton), address(dio.mipsSingleton()), "400");
-        assertEq(address(systemConfigImpl), address(dio.systemConfigImpl()), "500");
-        assertEq(address(l1CrossDomainMessengerImpl), address(dio.l1CrossDomainMessengerImpl()), "600");
-        assertEq(address(l1ERC721BridgeImpl), address(dio.l1ERC721BridgeImpl()), "700");
-        assertEq(address(l1StandardBridgeImpl), address(dio.l1StandardBridgeImpl()), "800");
-        assertEq(address(optimismMintableERC20FactoryImpl), address(dio.optimismMintableERC20FactoryImpl()), "900");
-        assertEq(address(disputeGameFactoryImpl), address(dio.disputeGameFactoryImpl()), "950");
-    }
-
-    function test_getters_whenNotSet_reverts() public {
-        bytes memory expectedErr = "DeployUtils: zero address";
-
-        vm.expectRevert(expectedErr);
-        dio.optimismPortalImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.delayedWETHImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.preimageOracleSingleton();
-
-        vm.expectRevert(expectedErr);
-        dio.mipsSingleton();
-
-        vm.expectRevert(expectedErr);
-        dio.systemConfigImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.l1CrossDomainMessengerImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.l1ERC721BridgeImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.l1StandardBridgeImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.optimismMintableERC20FactoryImpl();
-
-        vm.expectRevert(expectedErr);
-        dio.disputeGameFactoryImpl();
-    }
-
-    function test_getters_whenAddrHasNoCode_reverts() public {
-        address emptyAddr = makeAddr("emptyAddr");
-        bytes memory expectedErr = bytes(string.concat("DeployUtils: no code at ", vm.toString(emptyAddr)));
-
-        dio.set(dio.optimismPortalImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.optimismPortalImpl();
-
-        dio.set(dio.delayedWETHImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.delayedWETHImpl();
-
-        dio.set(dio.preimageOracleSingleton.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.preimageOracleSingleton();
-
-        dio.set(dio.mipsSingleton.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.mipsSingleton();
-
-        dio.set(dio.systemConfigImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.systemConfigImpl();
-
-        dio.set(dio.l1CrossDomainMessengerImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.l1CrossDomainMessengerImpl();
-
-        dio.set(dio.l1ERC721BridgeImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.l1ERC721BridgeImpl();
-
-        dio.set(dio.l1StandardBridgeImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.l1StandardBridgeImpl();
-
-        dio.set(dio.optimismMintableERC20FactoryImpl.selector, emptyAddr);
-        vm.expectRevert(expectedErr);
-        dio.optimismMintableERC20FactoryImpl();
-    }
-}
-
-contract DeployImplementations_Test is Test {
+contract DeployImplementations_Test is Test, FeatureFlags {
     using stdStorage for StdStorage;
 
     DeployImplementations deployImplementations;
-    DeployImplementationsInput dii;
-    DeployImplementationsOutput dio;
 
     // Define default inputs for testing.
     uint256 withdrawalDelaySeconds = 100;
@@ -248,169 +33,174 @@ contract DeployImplementations_Test is Test {
     uint256 disputeGameFinalityDelaySeconds = 500;
     ISuperchainConfig superchainConfigProxy = ISuperchainConfig(makeAddr("superchainConfigProxy"));
     IProtocolVersions protocolVersionsProxy = IProtocolVersions(makeAddr("protocolVersionsProxy"));
+    IProxyAdmin superchainProxyAdmin = IProxyAdmin(makeAddr("superchainProxyAdmin"));
+    address l1ProxyAdminOwner = makeAddr("l1ProxyAdminOwner");
+    address challenger = makeAddr("challenger");
 
     function setUp() public virtual {
+        resolveFeaturesFromEnv();
+        // We'll need to store some code on these two addresses so that the deployment script checks pass
+        vm.etch(address(superchainConfigProxy), hex"01");
+        vm.etch(address(protocolVersionsProxy), hex"01");
+
         deployImplementations = new DeployImplementations();
-        (dii, dio) = deployImplementations.etchIOContracts();
-
-        // End users of the DeployImplementations contract will need to set the `standardVersionsToml`.
-        string memory standardVersionsTomlPath =
-            string.concat(vm.projectRoot(), "/test/fixtures/standard-versions.toml");
-        string memory standardVersionsToml = vm.readFile(standardVersionsTomlPath);
-        dii.set(dii.standardVersionsToml.selector, standardVersionsToml);
-    }
-
-    // By deploying the `DeployImplementations` contract with this virtual function, we provide a
-    // hook that child contracts can override to return a different implementation of the contract.
-    // This lets us test e.g. the `DeployImplementationsInterop` contract without duplicating test code.
-    function createDeployImplementationsContract() internal virtual returns (DeployImplementations) {
-        return new DeployImplementations();
-    }
-
-    function hash(bytes32 _seed, uint256 _i) internal pure returns (bytes32) {
-        return keccak256(abi.encode(_seed, _i));
     }
 
     function test_deployImplementation_succeeds() public {
-        string memory deployContractsRelease = "dev-release";
-        dii.set(dii.release.selector, deployContractsRelease);
-        deployImplementations.deploySystemConfigImpl(dii, dio);
-        assertTrue(address(0) != address(dio.systemConfigImpl()));
+        DeployImplementations.Input memory input = defaultInput();
+        DeployImplementations.Output memory output = deployImplementations.run(input);
+
+        assertNotEq(address(output.systemConfigImpl), address(0));
+
+        assertNotEq(address(output.faultDisputeGameV2Impl), address(0), "FaultDisputeGameV2 should be deployed");
+        assertNotEq(
+            address(output.permissionedDisputeGameV2Impl), address(0), "PermissionedDisputeGameV2 should be deployed"
+        );
+
+        // Validate constructor args for FaultDisputeGameV2
+        assertEq(output.faultDisputeGameV2Impl.maxGameDepth(), 73, "FaultDisputeGameV2 maxGameDepth incorrect");
+        assertEq(output.faultDisputeGameV2Impl.splitDepth(), 30, "FaultDisputeGameV2 splitDepth incorrect");
+        assertEq(
+            output.faultDisputeGameV2Impl.clockExtension().raw(), 10800, "FaultDisputeGameV2 clockExtension incorrect"
+        );
+        assertEq(
+            output.faultDisputeGameV2Impl.maxClockDuration().raw(),
+            302400,
+            "FaultDisputeGameV2 maxClockDuration incorrect"
+        );
+
+        // Validate constructor args for PermissionedDisputeGameV2
+        assertEq(
+            output.permissionedDisputeGameV2Impl.maxGameDepth(), 73, "PermissionedDisputeGameV2 maxGameDepth incorrect"
+        );
+        assertEq(
+            output.permissionedDisputeGameV2Impl.splitDepth(), 30, "PermissionedDisputeGameV2 splitDepth incorrect"
+        );
+        assertEq(
+            output.permissionedDisputeGameV2Impl.clockExtension().raw(),
+            10800,
+            "PermissionedDisputeGameV2 clockExtension incorrect"
+        );
+        assertEq(
+            output.permissionedDisputeGameV2Impl.maxClockDuration().raw(),
+            302400,
+            "PermissionedDisputeGameV2 maxClockDuration incorrect"
+        );
+
+        // for the super DG implementation deployments
+        if (isDevFeatureEnabled(DevFeatures.OPTIMISM_PORTAL_INTEROP)) {
+            assertNotEq(
+                address(output.superFaultDisputeGameImpl), address(0), "SuperFaultDisputeGame should be deployed"
+            );
+            assertNotEq(
+                address(output.superPermissionedDisputeGameImpl),
+                address(0),
+                "SuperPermissionedDisputeGame should be deployed"
+            );
+
+            // Validate constructor args for SuperFaultDisputeGame
+            assertEq(
+                output.superFaultDisputeGameImpl.maxGameDepth(), 73, "SuperFaultDisputeGame maxGameDepth incorrect"
+            );
+            assertEq(output.superFaultDisputeGameImpl.splitDepth(), 30, "SuperFaultDisputeGame splitDepth incorrect");
+            assertEq(
+                output.superFaultDisputeGameImpl.clockExtension().raw(),
+                10800,
+                "SuperFaultDisputeGame clockExtension incorrect"
+            );
+            assertEq(
+                output.superFaultDisputeGameImpl.maxClockDuration().raw(),
+                302400,
+                "SuperFaultDisputeGame maxClockDuration incorrect"
+            );
+
+            // Validate constructor args for SuperPermissionedDisputeGame
+            assertEq(
+                output.superPermissionedDisputeGameImpl.maxGameDepth(),
+                73,
+                "SuperPermissionedDisputeGame maxGameDepth incorrect"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.splitDepth(),
+                30,
+                "SuperPermissionedDisputeGame splitDepth incorrect"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.clockExtension().raw(),
+                10800,
+                "SuperPermissionedDisputeGame clockExtension incorrect"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.maxClockDuration().raw(),
+                302400,
+                "SuperPermissionedDisputeGame maxClockDuration incorrect"
+            );
+        } else {
+            assertEq(
+                address(output.superFaultDisputeGameImpl), address(0), "SuperFaultDisputeGame should not be deployed"
+            );
+            assertEq(
+                address(output.superPermissionedDisputeGameImpl),
+                address(0),
+                "SuperPermissionedDisputeGame should not be deployed"
+            );
+        }
     }
 
     function test_reuseImplementation_succeeds() public {
-        // All hardcoded addresses below are taken from the superchain-registry config:
-        // https://github.com/ethereum-optimism/superchain-registry/blob/be65d22f8128cf0c4e5b4e1f677daf86843426bf/validation/standard/standard-versions.toml#L11
-        string memory testRelease = "op-contracts/v1.6.0";
-        dii.set(dii.release.selector, testRelease);
+        DeployImplementations.Input memory input = defaultInput();
+        DeployImplementations.Output memory output1 = deployImplementations.run(input);
+        DeployImplementations.Output memory output2 = deployImplementations.run(input);
 
-        deployImplementations.deploySystemConfigImpl(dii, dio);
-        address srSystemConfigImpl = address(0xF56D96B2535B932656d3c04Ebf51baBff241D886);
-        vm.etch(address(srSystemConfigImpl), hex"01");
-        assertEq(srSystemConfigImpl, address(dio.systemConfigImpl()));
+        // Assert that the addresses did not change.
+        assertEq(address(output1.systemConfigImpl), address(output2.systemConfigImpl), "100");
+        assertEq(address(output1.l1CrossDomainMessengerImpl), address(output2.l1CrossDomainMessengerImpl), "200");
+        assertEq(address(output1.l1ERC721BridgeImpl), address(output2.l1ERC721BridgeImpl), "300");
+        assertEq(address(output1.l1StandardBridgeImpl), address(output2.l1StandardBridgeImpl), "400");
+        assertEq(
+            address(output1.optimismMintableERC20FactoryImpl), address(output2.optimismMintableERC20FactoryImpl), "500"
+        );
+        assertEq(address(output1.optimismPortalImpl), address(output2.optimismPortalImpl), "600");
+        assertEq(address(output1.delayedWETHImpl), address(output2.delayedWETHImpl), "700");
+        assertEq(address(output1.preimageOracleSingleton), address(output2.preimageOracleSingleton), "800");
+        assertEq(address(output1.mipsSingleton), address(output2.mipsSingleton), "900");
+        assertEq(address(output1.disputeGameFactoryImpl), address(output2.disputeGameFactoryImpl), "1000");
+        assertEq(address(output1.anchorStateRegistryImpl), address(output2.anchorStateRegistryImpl), "1100");
+        assertEq(address(output1.opcm), address(output2.opcm), "1200");
+        assertEq(address(output1.ethLockboxImpl), address(output2.ethLockboxImpl), "1300");
+        assertEq(address(output1.faultDisputeGameV2Impl), address(output2.faultDisputeGameV2Impl), "1400");
+        assertEq(address(output1.permissionedDisputeGameV2Impl), address(output2.permissionedDisputeGameV2Impl), "1500");
 
-        address srL1CrossDomainMessengerImpl = address(0xD3494713A5cfaD3F5359379DfA074E2Ac8C6Fd65);
-        vm.etch(address(srL1CrossDomainMessengerImpl), hex"01");
-        deployImplementations.deployL1CrossDomainMessengerImpl(dii, dio);
-        assertEq(srL1CrossDomainMessengerImpl, address(dio.l1CrossDomainMessengerImpl()));
-
-        address srL1ERC721BridgeImpl = address(0xAE2AF01232a6c4a4d3012C5eC5b1b35059caF10d);
-        vm.etch(address(srL1ERC721BridgeImpl), hex"01");
-        deployImplementations.deployL1ERC721BridgeImpl(dii, dio);
-        assertEq(srL1ERC721BridgeImpl, address(dio.l1ERC721BridgeImpl()));
-
-        address srL1StandardBridgeImpl = address(0x64B5a5Ed26DCb17370Ff4d33a8D503f0fbD06CfF);
-        vm.etch(address(srL1StandardBridgeImpl), hex"01");
-        deployImplementations.deployL1StandardBridgeImpl(dii, dio);
-        assertEq(srL1StandardBridgeImpl, address(dio.l1StandardBridgeImpl()));
-
-        address srOptimismMintableERC20FactoryImpl = address(0xE01efbeb1089D1d1dB9c6c8b135C934C0734c846);
-        vm.etch(address(srOptimismMintableERC20FactoryImpl), hex"01");
-        deployImplementations.deployOptimismMintableERC20FactoryImpl(dii, dio);
-        assertEq(srOptimismMintableERC20FactoryImpl, address(dio.optimismMintableERC20FactoryImpl()));
-
-        address srOptimismPortalImpl = address(0xe2F826324b2faf99E513D16D266c3F80aE87832B);
-        vm.etch(address(srOptimismPortalImpl), hex"01");
-        deployImplementations.deployOptimismPortalImpl(dii, dio);
-        assertEq(srOptimismPortalImpl, address(dio.optimismPortalImpl()));
-
-        address srDelayedWETHImpl = address(0x71e966Ae981d1ce531a7b6d23DC0f27B38409087);
-        vm.etch(address(srDelayedWETHImpl), hex"01");
-        deployImplementations.deployDelayedWETHImpl(dii, dio);
-        assertEq(srDelayedWETHImpl, address(dio.delayedWETHImpl()));
-
-        address srPreimageOracleSingleton = address(0x9c065e11870B891D214Bc2Da7EF1f9DDFA1BE277);
-        vm.etch(address(srPreimageOracleSingleton), hex"01");
-        deployImplementations.deployPreimageOracleSingleton(dii, dio);
-        assertEq(srPreimageOracleSingleton, address(dio.preimageOracleSingleton()));
-
-        address srMipsSingleton = address(0x16e83cE5Ce29BF90AD9Da06D2fE6a15d5f344ce4);
-        vm.etch(address(srMipsSingleton), hex"01");
-        deployImplementations.deployMipsSingleton(dii, dio);
-        assertEq(srMipsSingleton, address(dio.mipsSingleton()));
-
-        address srDisputeGameFactoryImpl = address(0xc641A33cab81C559F2bd4b21EA34C290E2440C2B);
-        vm.etch(address(srDisputeGameFactoryImpl), hex"01");
-        deployImplementations.deployDisputeGameFactoryImpl(dii, dio);
-        assertEq(srDisputeGameFactoryImpl, address(dio.disputeGameFactoryImpl()));
+        assertNotEq(address(output1.faultDisputeGameV2Impl), address(0), "V2 contracts should not be null");
+        assertNotEq(address(output1.permissionedDisputeGameV2Impl), address(0), "V2 contracts should not be null");
     }
 
-    function test_deploy_atNonExistentRelease_reverts() public {
-        string memory unknownRelease = "op-contracts/v0.0.0";
-        dii.set(dii.release.selector, unknownRelease);
+    function testFuzz_run_memory_succeeds(
+        uint256 _withdrawalDelaySeconds,
+        uint256 _minProposalSizeBytes,
+        uint64 _challengePeriodSeconds,
+        uint256 _proofMaturityDelaySeconds,
+        uint256 _disputeGameFinalityDelaySeconds,
+        address _superchainConfigImpl,
+        uint256 _faultGameV2MaxGameDepth,
+        uint256 _faultGameV2SplitDepth,
+        uint256 _faultGameV2ClockExtension,
+        uint256 _faultGameV2MaxClockDuration,
+        bytes32 _devFeatureBitmap
+    )
+        public
+    {
+        _withdrawalDelaySeconds = bound(_withdrawalDelaySeconds, 1, type(uint256).max);
+        _minProposalSizeBytes = bound(_minProposalSizeBytes, 1, 1000000);
+        _challengePeriodSeconds = uint64(bound(uint256(_challengePeriodSeconds), 1, type(uint64).max));
+        _proofMaturityDelaySeconds = bound(_proofMaturityDelaySeconds, 1, type(uint256).max);
+        _disputeGameFinalityDelaySeconds = bound(_disputeGameFinalityDelaySeconds, 1, type(uint256).max);
 
-        bytes memory expectedErr =
-            bytes(string.concat("DeployImplementations: failed to deploy release ", unknownRelease));
+        // Ensure superchainConfigImpl is not zero address
+        vm.assume(_superchainConfigImpl != address(0));
+        // Must configure the ProxyAdmin contract.
 
-        vm.expectRevert(expectedErr);
-        deployImplementations.deploySystemConfigImpl(dii, dio);
-
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployL1CrossDomainMessengerImpl(dii, dio);
-
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployL1ERC721BridgeImpl(dii, dio);
-
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployL1StandardBridgeImpl(dii, dio);
-
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployOptimismMintableERC20FactoryImpl(dii, dio);
-
-        // TODO: Uncomment the code below when OPContractsManager is deployed based on release. Superchain-registry
-        // doesn't contain OPContractsManager yet.
-        // dii.set(dii.superchainConfigProxy.selector, address(superchainConfigProxy));
-        // dii.set(dii.protocolVersionsProxy.selector, address(protocolVersionsProxy));
-        // vm.etch(address(superchainConfigProxy), hex"01");
-        // vm.etch(address(protocolVersionsProxy), hex"01");
-        // vm.expectRevert(expectedErr);
-        // deployImplementations.deployOPContractsManagerImpl(dii, dio);
-
-        dii.set(dii.proofMaturityDelaySeconds.selector, 1);
-        dii.set(dii.disputeGameFinalityDelaySeconds.selector, 2);
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployOptimismPortalImpl(dii, dio);
-
-        dii.set(dii.withdrawalDelaySeconds.selector, 1);
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployDelayedWETHImpl(dii, dio);
-
-        dii.set(dii.minProposalSizeBytes.selector, 1);
-        dii.set(dii.challengePeriodSeconds.selector, 2);
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployPreimageOracleSingleton(dii, dio);
-
-        address preImageOracleSingleton = makeAddr("preImageOracleSingleton");
-        vm.etch(address(preImageOracleSingleton), hex"01");
-        dio.set(dio.preimageOracleSingleton.selector, preImageOracleSingleton);
-        vm.expectRevert(expectedErr);
-        deployImplementations.deployMipsSingleton(dii, dio);
-
-        vm.expectRevert(expectedErr); // fault proof contracts don't exist at this release
-        deployImplementations.deployDisputeGameFactoryImpl(dii, dio);
-    }
-
-    function test_deploy_noContractExistsAtRelease_reverts() public {
-        string memory unknownRelease = "op-contracts/v1.3.0";
-        dii.set(dii.release.selector, unknownRelease);
-        bytes memory expectedErr =
-            bytes(string.concat("DeployImplementations: failed to deploy release ", unknownRelease));
-
-        vm.expectRevert(expectedErr); // fault proof contracts don't exist at this release
-        deployImplementations.deployDisputeGameFactoryImpl(dii, dio);
-    }
-
-    function testFuzz_run_memory_succeeds(bytes32 _seed) public {
-        withdrawalDelaySeconds = uint256(hash(_seed, 0));
-        minProposalSizeBytes = uint256(hash(_seed, 1));
-        challengePeriodSeconds = bound(uint256(hash(_seed, 2)), 0, type(uint64).max);
-        proofMaturityDelaySeconds = uint256(hash(_seed, 3));
-        disputeGameFinalityDelaySeconds = uint256(hash(_seed, 4));
-        string memory release = string(bytes.concat(hash(_seed, 5)));
-        protocolVersionsProxy = IProtocolVersions(address(uint160(uint256(hash(_seed, 7)))));
-
-        // Must configure the ProxyAdmin contract which is used to upgrade the OPCM's proxy contract.
-        IProxyAdmin superchainProxyAdmin = IProxyAdmin(
+        superchainProxyAdmin = IProxyAdmin(
             DeployUtils.create1({
                 _name: "ProxyAdmin",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IProxyAdmin.__constructor__, (msg.sender)))
@@ -425,74 +215,354 @@ contract DeployImplementations_Test is Test {
             })
         );
 
-        ISuperchainConfig superchainConfigImpl = ISuperchainConfig(address(uint160(uint256(hash(_seed, 6)))));
+        ISuperchainConfig superchainConfigImpl = ISuperchainConfig(_superchainConfigImpl);
         vm.prank(address(superchainProxyAdmin));
         IProxy(payable(address(superchainConfigProxy))).upgradeTo(address(superchainConfigImpl));
 
-        vm.etch(address(superchainProxyAdmin), address(superchainProxyAdmin).code);
-        vm.etch(address(superchainConfigProxy), address(superchainConfigProxy).code);
-        vm.etch(address(protocolVersionsProxy), hex"01");
+        _faultGameV2MaxGameDepth = bound(_faultGameV2MaxGameDepth, 4, 125);
+        _faultGameV2SplitDepth =
+            bound(_faultGameV2SplitDepth, 2, _faultGameV2MaxGameDepth > 3 ? _faultGameV2MaxGameDepth - 2 : 2);
+        _faultGameV2ClockExtension = bound(_faultGameV2ClockExtension, 1, 7 days);
+        _faultGameV2MaxClockDuration = bound(_faultGameV2MaxClockDuration, _faultGameV2ClockExtension * 2, 30 days);
 
-        dii.set(dii.withdrawalDelaySeconds.selector, withdrawalDelaySeconds);
-        dii.set(dii.minProposalSizeBytes.selector, minProposalSizeBytes);
-        dii.set(dii.challengePeriodSeconds.selector, challengePeriodSeconds);
-        dii.set(dii.proofMaturityDelaySeconds.selector, proofMaturityDelaySeconds);
-        dii.set(dii.disputeGameFinalityDelaySeconds.selector, disputeGameFinalityDelaySeconds);
-        dii.set(dii.mipsVersion.selector, 1);
-        dii.set(dii.release.selector, release);
-        dii.set(dii.superchainConfigProxy.selector, address(superchainConfigProxy));
-        dii.set(dii.protocolVersionsProxy.selector, address(protocolVersionsProxy));
-        dii.set(dii.opcmProxyOwner.selector, msg.sender);
+        DeployImplementations.Input memory input = DeployImplementations.Input(
+            _withdrawalDelaySeconds,
+            _minProposalSizeBytes,
+            uint256(_challengePeriodSeconds),
+            _proofMaturityDelaySeconds,
+            _disputeGameFinalityDelaySeconds,
+            StandardConstants.MIPS_VERSION, // mipsVersion
+            _devFeatureBitmap, // devFeatureBitmap (fuzzed)
+            _faultGameV2MaxGameDepth, // faultGameV2MaxGameDepth (bounded)
+            _faultGameV2SplitDepth, // faultGameV2SplitDepth (bounded)
+            _faultGameV2ClockExtension, // faultGameV2ClockExtension (bounded)
+            _faultGameV2MaxClockDuration, // faultGameV2MaxClockDuration (bounded)
+            superchainConfigProxy,
+            protocolVersionsProxy,
+            superchainProxyAdmin,
+            l1ProxyAdminOwner,
+            challenger
+        );
 
-        deployImplementations.run(dii, dio);
+        DeployImplementations.Output memory output = deployImplementations.run(input);
 
-        // Assert that individual input fields were properly set based on the inputs.
-        assertEq(withdrawalDelaySeconds, dii.withdrawalDelaySeconds(), "100");
-        assertEq(minProposalSizeBytes, dii.minProposalSizeBytes(), "200");
-        assertEq(challengePeriodSeconds, dii.challengePeriodSeconds(), "300");
-        assertEq(proofMaturityDelaySeconds, dii.proofMaturityDelaySeconds(), "400");
-        assertEq(disputeGameFinalityDelaySeconds, dii.disputeGameFinalityDelaySeconds(), "500");
-        assertEq(1, dii.mipsVersion(), "512");
-        assertEq(release, dii.release(), "525");
-        assertEq(address(superchainConfigProxy), address(dii.superchainConfigProxy()), "550");
-        assertEq(address(protocolVersionsProxy), address(dii.protocolVersionsProxy()), "575");
-        assertEq(msg.sender, dii.opcmProxyOwner(), "580");
+        // Check which OPCM version is deployed
+        bool opcmV2Enabled = DevFeatures.isDevFeatureEnabled(_devFeatureBitmap, DevFeatures.OPCM_V2);
+
+        // Basic assertions
+        assertNotEq(address(output.anchorStateRegistryImpl), address(0), "100");
+        assertNotEq(address(output.delayedWETHImpl), address(0), "200");
+        assertNotEq(address(output.disputeGameFactoryImpl), address(0), "300");
+        assertNotEq(address(output.ethLockboxImpl), address(0), "400");
+        assertNotEq(address(output.l1CrossDomainMessengerImpl), address(0), "500");
+        assertNotEq(address(output.l1ERC721BridgeImpl), address(0), "500");
+        assertNotEq(address(output.l1StandardBridgeImpl), address(0), "600");
+        assertNotEq(address(output.mipsSingleton), address(0), "700");
+
+        // OPCM version-specific assertions
+        if (opcmV2Enabled) {
+            assertNotEq(address(output.opcmV2), address(0), "800");
+            assertNotEq(address(output.opcmContainer), address(0), "900");
+            assertNotEq(address(output.opcmStandardValidator), address(0), "1000");
+            // V1 contracts should be null when V2 is enabled
+            assertEq(address(output.opcm), address(0), "800-v1");
+            assertEq(address(output.opcmContractsContainer), address(0), "900-v1");
+            assertEq(address(output.opcmDeployer), address(0), "1000-v1");
+            assertEq(address(output.opcmGameTypeAdder), address(0), "1100-v1");
+        } else {
+            assertNotEq(address(output.opcm), address(0), "800");
+            assertNotEq(address(output.opcmContractsContainer), address(0), "900");
+            assertNotEq(address(output.opcmDeployer), address(0), "1000");
+            assertNotEq(address(output.opcmGameTypeAdder), address(0), "1100");
+            // V2 contracts should be null when V1 is enabled
+            assertEq(address(output.opcmV2), address(0), "800-v2");
+            assertEq(address(output.opcmContainer), address(0), "900-v2");
+        }
+
+        assertNotEq(address(output.faultDisputeGameV2Impl), address(0), "V2 should be deployed when enabled");
+        assertNotEq(address(output.permissionedDisputeGameV2Impl), address(0), "V2 should be deployed when enabled");
+
+        // Verify V2 constructor parameters match fuzz inputs
+        assertEq(output.faultDisputeGameV2Impl.maxGameDepth(), _faultGameV2MaxGameDepth, "FDGv2 maxGameDepth");
+        assertEq(output.faultDisputeGameV2Impl.splitDepth(), _faultGameV2SplitDepth, "FDGv2 splitDepth");
+        assertEq(
+            output.faultDisputeGameV2Impl.clockExtension().raw(),
+            uint64(_faultGameV2ClockExtension),
+            "FDGv2 clockExtension"
+        );
+        assertEq(
+            output.faultDisputeGameV2Impl.maxClockDuration().raw(),
+            uint64(_faultGameV2MaxClockDuration),
+            "FDGv2 maxClockDuration"
+        );
+
+        assertEq(output.permissionedDisputeGameV2Impl.maxGameDepth(), _faultGameV2MaxGameDepth, "PDGv2 maxGameDepth");
+        assertEq(output.permissionedDisputeGameV2Impl.splitDepth(), _faultGameV2SplitDepth, "PDGv2 splitDepth");
+        assertEq(
+            output.permissionedDisputeGameV2Impl.clockExtension().raw(),
+            uint64(_faultGameV2ClockExtension),
+            "PDGv2 clockExtension"
+        );
+        assertEq(
+            output.permissionedDisputeGameV2Impl.maxClockDuration().raw(),
+            uint64(_faultGameV2MaxClockDuration),
+            "PDGv2 maxClockDuration"
+        );
+
+        bool superGamesEnabled = DevFeatures.isDevFeatureEnabled(_devFeatureBitmap, DevFeatures.OPTIMISM_PORTAL_INTEROP);
+        if (superGamesEnabled) {
+            assertNotEq(
+                address(output.superFaultDisputeGameImpl), address(0), "super game should be deployed when enabled"
+            );
+            assertNotEq(
+                address(output.superPermissionedDisputeGameImpl),
+                address(0),
+                "permissioned super game should be deployed when enabled"
+            );
+            // Verify super game constructor parameters match fuzz inputs
+            assertEq(output.superFaultDisputeGameImpl.maxGameDepth(), _faultGameV2MaxGameDepth, "SuperDG maxGameDepth");
+            assertEq(output.superFaultDisputeGameImpl.splitDepth(), _faultGameV2SplitDepth, "SuperDG splitDepth");
+            assertEq(
+                output.superFaultDisputeGameImpl.clockExtension().raw(),
+                uint64(_faultGameV2ClockExtension),
+                "SuperDG clockExtension"
+            );
+            assertEq(
+                output.superFaultDisputeGameImpl.maxClockDuration().raw(),
+                uint64(_faultGameV2MaxClockDuration),
+                "SuperDG maxClockDuration"
+            );
+
+            assertEq(
+                output.superPermissionedDisputeGameImpl.maxGameDepth(),
+                _faultGameV2MaxGameDepth,
+                "PSuperDG maxGameDepth"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.splitDepth(), _faultGameV2SplitDepth, "PSuperDG splitDepth"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.clockExtension().raw(),
+                uint64(_faultGameV2ClockExtension),
+                "PSuperDG clockExtension"
+            );
+            assertEq(
+                output.superPermissionedDisputeGameImpl.maxClockDuration().raw(),
+                uint64(_faultGameV2MaxClockDuration),
+                "PSuperDG maxClockDuration"
+            );
+        } else {
+            assertEq(address(output.superFaultDisputeGameImpl), address(0), "super game should be null when disabled");
+            assertEq(
+                address(output.superPermissionedDisputeGameImpl),
+                address(0),
+                "super permissioned game should be null when disabled"
+            );
+        }
+
+        // Address contents assertions
+        bytes memory empty;
+
+        assertNotEq(address(output.anchorStateRegistryImpl).code, empty, "1200");
+        assertNotEq(address(output.delayedWETHImpl).code, empty, "1300");
+        assertNotEq(address(output.disputeGameFactoryImpl).code, empty, "1400");
+        assertNotEq(address(output.ethLockboxImpl).code, empty, "1500");
+        assertNotEq(address(output.l1CrossDomainMessengerImpl).code, empty, "1600");
+        assertNotEq(address(output.l1ERC721BridgeImpl).code, empty, "1700");
+        assertNotEq(address(output.l1StandardBridgeImpl).code, empty, "1800");
+        assertNotEq(address(output.mipsSingleton).code, empty, "1900");
+
+        // OPCM version-specific code assertions
+        if (opcmV2Enabled) {
+            assertNotEq(address(output.opcmV2).code, empty, "2000");
+            assertNotEq(address(output.opcmContainer).code, empty, "2100");
+            assertNotEq(address(output.opcmStandardValidator).code, empty, "2200");
+            // V1 contracts should be empty when V2 is enabled
+            assertEq(address(output.opcm).code, empty, "2000-v1");
+            assertEq(address(output.opcmContractsContainer).code, empty, "2100-v1");
+            assertEq(address(output.opcmDeployer).code, empty, "2200-v1");
+            assertEq(address(output.opcmGameTypeAdder).code, empty, "2300-v1");
+        } else {
+            assertNotEq(address(output.opcm).code, empty, "2000");
+            assertNotEq(address(output.opcmContractsContainer).code, empty, "2100");
+            assertNotEq(address(output.opcmDeployer).code, empty, "2200");
+            assertNotEq(address(output.opcmGameTypeAdder).code, empty, "2300");
+            // V2 contracts should be empty when V1 is enabled
+            assertEq(address(output.opcmV2).code, empty, "2000-v2");
+            assertEq(address(output.opcmContainer).code, empty, "2100-v2");
+        }
+
+        assertNotEq(address(output.faultDisputeGameV2Impl).code, empty, "V2 FDG should have code when enabled");
+        assertNotEq(address(output.permissionedDisputeGameV2Impl).code, empty, "V2 PDG should have code when enabled");
+        if (superGamesEnabled) {
+            assertNotEq(address(output.superFaultDisputeGameImpl).code, empty, "Super DG should have code when enabled");
+            assertNotEq(
+                address(output.superPermissionedDisputeGameImpl).code,
+                empty,
+                "Super Permissioned DG should have code when enabled"
+            );
+        } else {
+            assertEq(address(output.superFaultDisputeGameImpl).code, empty, "Super DG should be empty when disabled");
+            assertEq(
+                address(output.superPermissionedDisputeGameImpl).code,
+                empty,
+                "Super Permissioned DG should be empty when disabled"
+            );
+        }
 
         // Architecture assertions.
-        assertEq(address(dio.mipsSingleton().oracle()), address(dio.preimageOracleSingleton()), "600");
-
-        // Ensure that `checkOutput` passes. This is called by the `run` function during execution,
-        // so this just acts as a sanity check. It reverts on failure.
-        dio.checkOutput(dii);
+        assertEq(address(output.mipsSingleton.oracle()), address(output.preimageOracleSingleton), "600");
     }
 
-    function testFuzz_run_largeChallengePeriodSeconds_reverts(uint256 _challengePeriodSeconds) public {
-        // Set the defaults.
-        dii.set(dii.withdrawalDelaySeconds.selector, withdrawalDelaySeconds);
-        dii.set(dii.minProposalSizeBytes.selector, minProposalSizeBytes);
-        dii.set(dii.challengePeriodSeconds.selector, challengePeriodSeconds);
-        dii.set(dii.proofMaturityDelaySeconds.selector, proofMaturityDelaySeconds);
-        dii.set(dii.disputeGameFinalityDelaySeconds.selector, disputeGameFinalityDelaySeconds);
-        dii.set(dii.mipsVersion.selector, 1);
-        string memory release = "dev-release";
-        dii.set(dii.release.selector, release);
-        dii.set(dii.superchainConfigProxy.selector, address(superchainConfigProxy));
-        dii.set(dii.protocolVersionsProxy.selector, address(protocolVersionsProxy));
+    function test_run_deployMipsV1OnMainnetOrSepolia_reverts() public {
+        DeployImplementations.Input memory input = defaultInput();
+        input.mipsVersion = 1;
 
-        // Set the challenge period to a value that is too large, using vm.store because the setter
-        // method won't allow it.
-        challengePeriodSeconds = bound(_challengePeriodSeconds, uint256(type(uint64).max) + 1, type(uint256).max);
-        uint256 slot =
-            stdstore.enable_packed_slots().target(address(dii)).sig(dii.challengePeriodSeconds.selector).find();
-        vm.store(address(dii), bytes32(slot), bytes32(challengePeriodSeconds));
+        vm.chainId(Chains.Mainnet);
+        vm.expectRevert("DeployImplementations: Only Mips64 should be deployed on Mainnet or Sepolia");
+        deployImplementations.run(input);
 
-        vm.expectRevert("DeployImplementationsInput: challengePeriodSeconds too large");
-        deployImplementations.run(dii, dio);
+        vm.chainId(Chains.Sepolia);
+        vm.expectRevert("DeployImplementations: Only Mips64 should be deployed on Mainnet or Sepolia");
+        deployImplementations.run(input);
     }
-}
 
-contract DeployImplementationsInterop_Test is DeployImplementations_Test {
-    function createDeployImplementationsContract() internal override returns (DeployImplementations) {
-        return new DeployImplementationsInterop();
+    function test_challengePeriodSeconds_valueTooLarge_reverts(uint256 _challengePeriodSeconds) public {
+        vm.assume(_challengePeriodSeconds > uint256(type(uint64).max));
+
+        DeployImplementations.Input memory input = defaultInput();
+        input.challengePeriodSeconds = _challengePeriodSeconds;
+
+        vm.expectRevert("DeployImplementations: challengePeriodSeconds too large");
+        deployImplementations.run(input);
+    }
+
+    function test_run_nullInput_reverts() public {
+        DeployImplementations.Input memory input;
+
+        input = defaultInput();
+        input.withdrawalDelaySeconds = 0;
+        vm.expectRevert("DeployImplementations: withdrawalDelaySeconds not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.minProposalSizeBytes = 0;
+        vm.expectRevert("DeployImplementations: minProposalSizeBytes not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.challengePeriodSeconds = 0;
+        vm.expectRevert("DeployImplementations: challengePeriodSeconds not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.proofMaturityDelaySeconds = 0;
+        vm.expectRevert("DeployImplementations: proofMaturityDelaySeconds not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.disputeGameFinalityDelaySeconds = 0;
+        vm.expectRevert("DeployImplementations: disputeGameFinalityDelaySeconds not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.mipsVersion = 0;
+        vm.expectRevert("DeployImplementations: mipsVersion not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.superchainConfigProxy = ISuperchainConfig(address(0));
+        vm.expectRevert("DeployImplementations: superchainConfigProxy not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.protocolVersionsProxy = IProtocolVersions(address(0));
+        vm.expectRevert("DeployImplementations: protocolVersionsProxy not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.superchainProxyAdmin = IProxyAdmin(address(0));
+        vm.expectRevert("DeployImplementations: superchainProxyAdmin not set");
+        deployImplementations.run(input);
+
+        input = defaultInput();
+        input.l1ProxyAdminOwner = address(0);
+        vm.expectRevert("DeployImplementations: L1ProxyAdminOwner not set");
+        deployImplementations.run(input);
+    }
+
+    function test_invalidV2GameParams_withV2Enabled_reverts() public {
+        DeployImplementations.Input memory input;
+
+        // Test that huge clock extension is rejected
+        input = defaultInput();
+        input.faultGameV2ClockExtension = type(uint256).max;
+        vm.expectRevert("DeployImplementations: faultGameV2ClockExtension too large for uint64");
+        deployImplementations.run(input);
+
+        // Reset and test huge max clock duration
+        input = defaultInput();
+        input.faultGameV2MaxClockDuration = type(uint256).max;
+        vm.expectRevert("DeployImplementations: faultGameV2MaxClockDuration too large for uint64");
+        deployImplementations.run(input);
+
+        // Reset and test huge max game depth
+        input = defaultInput();
+        input.faultGameV2MaxGameDepth = 300;
+        vm.expectRevert("DeployImplementations: faultGameV2MaxGameDepth out of valid range (1-125)");
+        deployImplementations.run(input);
+
+        // Reset and test zero max game depth
+        input = defaultInput();
+        input.faultGameV2MaxGameDepth = 0;
+        vm.expectRevert("DeployImplementations: faultGameV2MaxGameDepth out of valid range (1-125)");
+        deployImplementations.run(input);
+
+        // Reset and test invalid split depth
+        input = defaultInput();
+        input.faultGameV2MaxGameDepth = 50;
+        input.faultGameV2SplitDepth = 49; // splitDepth + 1 must be < maxGameDepth
+        vm.expectRevert("DeployImplementations: faultGameV2SplitDepth must be >= 2 and splitDepth + 1 < maxGameDepth");
+        deployImplementations.run(input);
+
+        // Reset and test invalid split depth (too small, < 2)
+        input = defaultInput();
+        input.faultGameV2SplitDepth = 1; // < 2
+        vm.expectRevert("DeployImplementations: faultGameV2SplitDepth must be >= 2 and splitDepth + 1 < maxGameDepth");
+        deployImplementations.run(input);
+
+        // Reset and test clock extension = 0 (must be > 0 when V2 enabled)
+        input = defaultInput();
+        input.faultGameV2ClockExtension = 0;
+        vm.expectRevert("DeployImplementations: faultGameV2ClockExtension must be > 0");
+        deployImplementations.run(input);
+
+        // Reset and test maxClockDuration < clockExtension
+        input = defaultInput();
+        input.faultGameV2ClockExtension = 1000;
+        input.faultGameV2MaxClockDuration = 500; // < clockExtension
+        vm.expectRevert("DeployImplementations: maxClockDuration must be >= clockExtension");
+        deployImplementations.run(input);
+    }
+
+    function defaultInput() private view returns (DeployImplementations.Input memory input_) {
+        input_ = DeployImplementations.Input(
+            withdrawalDelaySeconds,
+            minProposalSizeBytes,
+            challengePeriodSeconds,
+            proofMaturityDelaySeconds,
+            disputeGameFinalityDelaySeconds,
+            StandardConstants.MIPS_VERSION, // mipsVersion
+            devFeatureBitmap,
+            73, // faultGameV2MaxGameDepth
+            30, // faultGameV2SplitDepth
+            10800, // faultGameV2ClockExtension
+            302400, // faultGameV2MaxClockDuration
+            superchainConfigProxy,
+            protocolVersionsProxy,
+            superchainProxyAdmin,
+            l1ProxyAdminOwner,
+            challenger
+        );
     }
 }

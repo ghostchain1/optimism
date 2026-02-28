@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
 
+	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
@@ -43,16 +44,23 @@ func TestDecodeExecutingMessageLog(t *testing.T) {
 	//     uint256 timestamp;
 	//     uint256 chainId;
 	// }
-	// function executeMessage(Identifier calldata _id,
-	//     address _target, bytes calldata _message) external payable;
+	// event ExecutingMessage(bytes32 indexed msgHash, Identifier id);
 
 	originAddr := common.HexToAddress("0x5fbdb2315678afecb367f032d93f642f64180aa3")
 	payloadHash := common.HexToHash("0xc3f57e1f0dd62a4f77787d834029bfeaab8894022c47edbe13b044fb658c9190")
 	logHash := types.PayloadHashToLogHash(payloadHash, originAddr)
+	args := types.ChecksumArgs{
+		BlockNumber: uint64(4509),
+		LogIndex:    uint32(0),
+		Timestamp:   uint64(1730467171),
+		ChainID:     eth.ChainIDFromUInt64(900200),
+		LogHash:     logHash,
+	}
+	checksum := args.Checksum()
 
-	require.Equal(t, logHash, msg.Hash)
+	require.Equal(t, checksum, msg.Checksum)
 	require.Equal(t, uint64(4509), msg.BlockNum)
 	require.Equal(t, uint32(0), msg.LogIdx)
 	require.Equal(t, uint64(1730467171), msg.Timestamp)
-	require.Equal(t, types.ChainIndex(900200), msg.Chain)
+	require.Equal(t, eth.ChainIDFromUInt64(900200), msg.ChainID)
 }

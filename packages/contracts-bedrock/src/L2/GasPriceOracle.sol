@@ -5,10 +5,11 @@ pragma solidity 0.8.15;
 import { LibZip } from "@solady/utils/LibZip.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
 import { Constants } from "src/libraries/Constants.sol";
+import { Arithmetic } from "src/libraries/Arithmetic.sol";
 
 // Interfaces
-import { ISemver } from "src/universal/interfaces/ISemver.sol";
-import { IL1Block } from "src/L2/interfaces/IL1Block.sol";
+import { ISemver } from "interfaces/universal/ISemver.sol";
+import { IL1Block } from "interfaces/L2/IL1Block.sol";
 
 /// @custom:proxied true
 /// @custom:predeploy 0x420000000000000000000000000000000000000F
@@ -29,8 +30,8 @@ contract GasPriceOracle is ISemver {
     uint256 public constant DECIMALS = 6;
 
     /// @notice Semantic version.
-    /// @custom:semver 1.3.1-beta.3
-    string public constant version = "1.3.1-beta.3";
+    /// @custom:semver 1.6.0
+    string public constant version = "1.6.0";
 
     /// @notice This is the intercept value for the linear regression used to estimate the final size of the
     ///         compressed transaction.
@@ -49,6 +50,12 @@ contract GasPriceOracle is ISemver {
 
     /// @notice Indicates whether the network has gone through the Fjord upgrade.
     bool public isFjord;
+
+    /// @notice Indicates whether the network has gone through the Isthmus upgrade.
+    bool public isIsthmus;
+
+    /// @notice Indicates whether the network has gone through the Jovian upgrade.
+    bool public isJovian;
 
     /// @notice Computes the L1 portion of the fee based on the size of the rlp encoded input
     ///         transaction, the current L1 base fee, and the various dynamic parameters.
@@ -98,6 +105,28 @@ contract GasPriceOracle is ISemver {
         require(isEcotone, "GasPriceOracle: Fjord can only be activated after Ecotone");
         require(isFjord == false, "GasPriceOracle: Fjord already active");
         isFjord = true;
+    }
+
+    /// @notice Set chain to be Isthmus chain (callable by depositor account)
+    function setIsthmus() external {
+        require(
+            msg.sender == Constants.DEPOSITOR_ACCOUNT,
+            "GasPriceOracle: only the depositor account can set isIsthmus flag"
+        );
+        require(isFjord, "GasPriceOracle: Isthmus can only be activated after Fjord");
+        require(isIsthmus == false, "GasPriceOracle: Isthmus already active");
+        isIsthmus = true;
+    }
+
+    /// @notice Set chain to be Jovian chain (callable by depositor account)
+    function setJovian() external {
+        require(
+            msg.sender == Constants.DEPOSITOR_ACCOUNT,
+            "GasPriceOracle: only the depositor account can set isJovian flag"
+        );
+        require(isIsthmus, "GasPriceOracle: Jovian can only be activated after Isthmus");
+        require(isJovian == false, "GasPriceOracle: Jovian already active");
+        isJovian = true;
     }
 
     /// @notice Retrieves the current gas price (base fee).
@@ -177,6 +206,28 @@ contract GasPriceOracle is ISemver {
             return l1GasUsed;
         }
         return l1GasUsed + IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).l1FeeOverhead();
+    }
+
+    /// @notice Calculates the operator fee for a given gas usage.
+    /// @dev Formula varies based on fork activation:
+    ///      - Pre-Isthmus: Returns 0 (no operator fee)
+    ///      - Isthmus (pre-Jovian): operatorFee = (gasUsed * operatorFeeScalar / 1e6) + operatorFeeConstant
+    ///      - Jovian and after: operatorFee = (gasUsed * operatorFeeScalar * 100) + operatorFeeConstant
+    /// @param _gasUsed The amount of gas used by the transaction
+    /// @return The calculated operator fee
+    function getOperatorFee(uint256 _gasUsed) public view returns (uint256) {
+        if (!isIsthmus) {
+            return 0;
+        }
+
+        uint256 operatorScalar = IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).operatorFeeScalar();
+        uint256 operatorConstant = IL1Block(Predeploys.L1_BLOCK_ATTRIBUTES).operatorFeeConstant();
+
+        if (isJovian) {
+            return _gasUsed * operatorScalar * 100 + operatorConstant;
+        } else {
+            return Arithmetic.saturatingAdd(Arithmetic.saturatingMul(_gasUsed, operatorScalar) / 1e6, operatorConstant);
+        }
     }
 
     /// @notice Computation of the L1 portion of the fee for Bedrock.

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"math/big"
 	"time"
@@ -21,100 +20,6 @@ var (
 	ErrL2BlockNumberValid = errors.New("l2 block number is valid")
 )
 
-type GameType uint32
-
-const (
-	CannonGameType       GameType = 0
-	PermissionedGameType GameType = 1
-	AsteriscGameType     GameType = 2
-	AsteriscKonaGameType GameType = 3
-	FastGameType         GameType = 254
-	AlphabetGameType     GameType = 255
-	UnknownGameType      GameType = math.MaxUint32
-)
-
-func (t GameType) MarshalText() ([]byte, error) {
-	return []byte(t.String()), nil
-}
-
-func (t GameType) String() string {
-	switch t {
-	case CannonGameType:
-		return "cannon"
-	case PermissionedGameType:
-		return "permissioned"
-	case AsteriscGameType:
-		return "asterisc"
-	case AsteriscKonaGameType:
-		return "asterisc-kona"
-	case FastGameType:
-		return "fast"
-	case AlphabetGameType:
-		return "alphabet"
-	default:
-		return fmt.Sprintf("<invalid: %d>", t)
-	}
-}
-
-type TraceType string
-
-const (
-	TraceTypeAlphabet     TraceType = "alphabet"
-	TraceTypeFast         TraceType = "fast"
-	TraceTypeCannon       TraceType = "cannon"
-	TraceTypeAsterisc     TraceType = "asterisc"
-	TraceTypeAsteriscKona TraceType = "asterisc-kona"
-	TraceTypePermissioned TraceType = "permissioned"
-)
-
-var TraceTypes = []TraceType{TraceTypeAlphabet, TraceTypeCannon, TraceTypePermissioned, TraceTypeAsterisc, TraceTypeAsteriscKona, TraceTypeFast}
-
-func (t TraceType) String() string {
-	return string(t)
-}
-
-// Set implements the Set method required by the [cli.Generic] interface.
-func (t *TraceType) Set(value string) error {
-	if !ValidTraceType(TraceType(value)) {
-		return fmt.Errorf("unknown trace type: %q", value)
-	}
-	*t = TraceType(value)
-	return nil
-}
-
-func (t *TraceType) Clone() any {
-	cpy := *t
-	return &cpy
-}
-
-func ValidTraceType(value TraceType) bool {
-	for _, t := range TraceTypes {
-		if t == value {
-			return true
-		}
-	}
-	return false
-}
-
-func (t TraceType) GameType() GameType {
-	switch t {
-	case TraceTypeCannon:
-		return CannonGameType
-	case TraceTypePermissioned:
-		return PermissionedGameType
-	case TraceTypeAsterisc:
-		return AsteriscGameType
-	case TraceTypeAsteriscKona:
-		return AsteriscKonaGameType
-	case TraceTypeFast:
-		return FastGameType
-	case TraceTypeAlphabet:
-		return AlphabetGameType
-	default:
-		return UnknownGameType
-	}
-}
-
 type ClockReader interface {
 	Now() time.Time
 }
@@ -128,7 +33,7 @@ type PreimageOracleData struct {
 	OracleOffset uint32
 
 	// 4844 blob data
-	BlobFieldIndex uint64
+	ZPoint         [32]byte
 	BlobCommitment []byte
 	BlobProof      []byte
 }
@@ -170,13 +75,13 @@ func NewPreimageOracleData(key []byte, data []byte, offset uint32) *PreimageOrac
 	}
 }
 
-func NewPreimageOracleBlobData(key []byte, data []byte, offset uint32, fieldIndex uint64, commitment []byte, proof []byte) *PreimageOracleData {
+func NewPreimageOracleBlobData(key []byte, data []byte, offset uint32, zPoint [32]byte, commitment []byte, proof []byte) *PreimageOracleData {
 	return &PreimageOracleData{
 		IsLocal:        false,
 		OracleKey:      key,
 		oracleData:     data,
 		OracleOffset:   offset,
-		BlobFieldIndex: fieldIndex,
+		ZPoint:         zPoint,
 		BlobCommitment: commitment,
 		BlobProof:      proof,
 	}
@@ -288,6 +193,14 @@ type Clock struct {
 	Timestamp time.Time
 }
 
+// DecodeClock decodes a uint128 into a Clock duration and timestamp.
+func DecodeClock(clock *big.Int) Clock {
+	maxUint64 := new(big.Int).Add(new(big.Int).SetUint64(math.MaxUint64), big.NewInt(1))
+	remainder := new(big.Int)
+	quotient, _ := new(big.Int).QuoRem(clock, maxUint64, remainder)
+	return NewClock(time.Duration(quotient.Int64())*time.Second, time.Unix(remainder.Int64(), 0))
+}
+
 // NewClock creates a new Clock instance.
 func NewClock(duration time.Duration, timestamp time.Time) Clock {
 	return Clock{
@@ -307,3 +220,14 @@ func NewInvalidL2BlockNumberProof(output *eth.OutputResponse, header *ethTypes.H
 		Header: header,
 	}
 }
+
+type BondDistributionMode uint8
+
+const (
+	UndecidedDistributionMode BondDistributionMode = iota
+	NormalDistributionMode
+	RefundDistributionMode
+
+	// LegacyDistributionMode is used for contract versions that do not implement bond distribution modes.
+	LegacyDistributionMode BondDistributionMode = 255
+)

@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/testutils"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie"
 )
 
@@ -17,13 +18,13 @@ import (
 // L1 Info Deposit transaction.
 func RandomL2Block(rng *rand.Rand, txCount int, t time.Time) (*types.Block, []*types.Receipt) {
 	body := types.Body{}
-	l1Block := types.NewBlock(testutils.RandomHeader(rng), &body, nil, trie.NewStackTrie(nil))
+	l1Block := types.NewBlock(testutils.RandomHeader(rng), &body, nil, trie.NewStackTrie(nil), types.DefaultBlockConfig)
 	rollupCfg := rollup.Config{}
 	if testutils.RandomBool(rng) {
 		t := uint64(0)
 		rollupCfg.RegolithTime = &t
 	}
-	l1InfoTx, err := derive.L1InfoDeposit(&rollupCfg, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), 0)
+	l1InfoTx, err := derive.L1InfoDeposit(&rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 0, eth.BlockToInfo(l1Block), 0)
 	if err != nil {
 		panic("L1InfoDeposit: " + err.Error())
 	}
@@ -40,7 +41,7 @@ func RandomL2BlockWithChainId(rng *rand.Rand, txCount int, chainId *big.Int) *ty
 }
 
 func RandomL2BlockWithChainIdAndTime(rng *rand.Rand, txCount int, chainId *big.Int, t time.Time) *types.Block {
-	signer := types.NewLondonSigner(chainId)
+	signer := types.NewIsthmusSigner(chainId)
 	block, _ := RandomL2Block(rng, 0, t)
 	txs := []*types.Transaction{block.Transactions()[0]} // L1 info deposit TX
 	for i := 0; i < txCount; i++ {

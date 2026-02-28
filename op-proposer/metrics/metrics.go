@@ -33,6 +33,8 @@ type Metricer interface {
 
 	StartBalanceMetrics(l log.Logger, client *ethclient.Client, account common.Address) io.Closer
 
+	RecordL2Proposal(sequenceNum uint64)
+	RecordGuardDecision(result string)
 	RecordL2BlocksProposed(l2ref eth.L2BlockRef)
 }
 
@@ -44,6 +46,9 @@ type Metrics struct {
 	opmetrics.RefMetrics
 	txmetrics.TxMetrics
 	opmetrics.RPCMetrics
+
+	proposalSequenceNum prometheus.Gauge
+	guardDecisions      *prometheus.CounterVec
 
 	info prometheus.GaugeVec
 	up   prometheus.Gauge
@@ -69,6 +74,18 @@ func NewMetrics(procName string) *Metrics {
 		TxMetrics:  txmetrics.MakeTxMetrics(ns, factory),
 		RPCMetrics: opmetrics.MakeRPCMetrics(ns, factory),
 
+		proposalSequenceNum: factory.NewGauge(prometheus.GaugeOpts{
+			Namespace: ns,
+			Name:      "proposed_sequence_number",
+			Help:      "Sequence number (block number or timestamp) of the latest proposal",
+		}),
+		guardDecisions: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "guard_decisions_total",
+			Help:      "Count of guard decisions by result (allow|deny|error)",
+		}, []string{
+			"result",
+		}),
 		info: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns,
 			Name:      "info",
@@ -100,7 +117,6 @@ func (m *Metrics) RecordInfo(version string) {
 
 // RecordUp sets the up metric to 1.
 func (m *Metrics) RecordUp() {
-	prometheus.MustRegister()
 	m.up.Set(1)
 }
 
@@ -111,6 +127,14 @@ const (
 // RecordL2BlocksProposed should be called when new L2 block is proposed
 func (m *Metrics) RecordL2BlocksProposed(l2ref eth.L2BlockRef) {
 	m.RecordL2Ref(BlockProposed, l2ref)
+}
+
+func (m *Metrics) RecordL2Proposal(seqNum uint64) {
+	m.proposalSequenceNum.Set(float64(seqNum))
+}
+
+func (m *Metrics) RecordGuardDecision(result string) {
+	m.guardDecisions.WithLabelValues(result).Inc()
 }
 
 func (m *Metrics) Document() []opmetrics.DocumentedMetric {

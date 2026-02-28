@@ -61,7 +61,7 @@ func NormalBatcher(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, deltaTimeOffset)
@@ -366,7 +366,7 @@ func ExtendedTimeWithoutL1Batches(gt *testing.T, deltaTimeOffset *hexutil.Uint64
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, deltaTimeOffset)
@@ -408,7 +408,7 @@ func ExtendedTimeWithoutL1Batches(gt *testing.T, deltaTimeOffset *hexutil.Uint64
 //   - Fill 40 L2 blocks to near max-capacity, with txs of 120 KB each
 //   - Buffer the L2 blocks into channels together as much as possible, submit data-txs only when necessary
 //     (just before crossing the max RLP channel size)
-//   - Limit the data-tx size to 40 KB, to force data to be split across multiple datat-txs
+//   - Limit the data-tx size to 40 KB, to force data to be split across multiple data-txs
 //   - Defer all data-tx inclusion till the end
 //   - Fill L1 blocks with data-txs until we have processed them all
 //   - Run the verifier, and check if it derives the same L2 chain as was created by the sequencer.
@@ -423,7 +423,7 @@ func BigL2Txs(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 		SequencerWindowSize: 1000,
 		ChannelTimeout:      200, // give enough space to buffer large amounts of data before submitting it
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	upgradesHelpers.ApplyDeltaTimeOffset(dp, deltaTimeOffset)
@@ -472,7 +472,7 @@ func BigL2Txs(gt *testing.T, deltaTimeOffset *hexutil.Uint64) {
 			data := make([]byte, 120_000) // very large L2 txs, as large as the tx-pool will accept
 			_, err := rng.Read(data[:])   // fill with random bytes, to make compression ineffective
 			require.NoError(t, err)
-			gas, err := core.IntrinsicGas(data, nil, false, true, true, false)
+			gas, err := core.IntrinsicGas(data, nil, nil, false, true, true, false)
 			require.NoError(t, err)
 			if gas > engine.EngineApi.RemainingBlockGas() {
 				break

@@ -32,6 +32,11 @@ var (
 		Usage:   "HTTP provider URL for the rollup node. A comma-separated list enables the active rollup provider.",
 		EnvVars: prefixEnvVars("ROLLUP_RPC"),
 	}
+	SupervisorRpcsFlag = &cli.StringSliceFlag{
+		Name:    "supervisor-rpcs",
+		Usage:   "HTTP provider URLs for the supervisor nodes. Multiple URLs can be provided to automatically fail over.",
+		EnvVars: prefixEnvVars("SUPERVISOR_RPCS"),
+	}
 
 	// Optional flags
 	L2OOAddressFlag = &cli.StringFlag{
@@ -41,7 +46,7 @@ var (
 	}
 	PollIntervalFlag = &cli.DurationFlag{
 		Name:    "poll-interval",
-		Usage:   "How frequently to poll L2 for new blocks (legacy L2OO)",
+		Usage:   "Delay between periodic checks on whether it is time to load an output root and propose it.",
 		Value:   12 * time.Second,
 		EnvVars: prefixEnvVars("POLL_INTERVAL"),
 	}
@@ -49,6 +54,23 @@ var (
 		Name:    "allow-non-finalized",
 		Usage:   "Allow the proposer to submit proposals for L2 blocks derived from non-finalized L1 blocks.",
 		EnvVars: prefixEnvVars("ALLOW_NON_FINALIZED"),
+	}
+	GuardURLFlag = &cli.StringFlag{
+		Name:    "guard-url",
+		Usage:   "HTTP endpoint to vet proposals before submission (skip if empty).",
+		EnvVars: prefixEnvVars("GUARD_URL"),
+	}
+	GuardTimeoutFlag = &cli.DurationFlag{
+		Name:    "guard-timeout",
+		Usage:   "Timeout for the guard HTTP request.",
+		Value:   5 * time.Second,
+		EnvVars: prefixEnvVars("GUARD_TIMEOUT"),
+	}
+	GuardFailOpenFlag = &cli.BoolFlag{
+		Name:    "guard-fail-open",
+		Usage:   "If true, continue proposing when the guard is unreachable/timeouts; if false, block proposals on guard failures.",
+		Value:   true,
+		EnvVars: prefixEnvVars("GUARD_FAIL_OPEN"),
 	}
 	DisputeGameFactoryAddressFlag = &cli.StringFlag{
 		Name:    "game-factory-address",
@@ -85,10 +107,11 @@ var (
 
 var requiredFlags = []cli.Flag{
 	L1EthRpcFlag,
-	RollupRpcFlag,
 }
 
 var optionalFlags = []cli.Flag{
+	RollupRpcFlag,
+	SupervisorRpcsFlag,
 	L2OOAddressFlag,
 	PollIntervalFlag,
 	AllowNonFinalizedFlag,
@@ -96,6 +119,9 @@ var optionalFlags = []cli.Flag{
 	DisputeGameFactoryAddressFlag,
 	ProposalIntervalFlag,
 	DisputeGameTypeFlag,
+	GuardURLFlag,
+	GuardTimeoutFlag,
+	GuardFailOpenFlag,
 	ActiveSequencerCheckDurationFlag,
 	WaitNodeSyncFlag,
 }

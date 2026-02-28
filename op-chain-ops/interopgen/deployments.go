@@ -1,6 +1,7 @@
 package interopgen
 
 import (
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -9,10 +10,20 @@ type L1Deployment struct {
 }
 
 type Implementations struct {
-	OpcmProxy                        common.Address `json:"OPCMProxy"`
-	OpcmImpl                         common.Address `json:"OPCMImpl"`
+	Opcm                             common.Address `json:"OPCM"`
+	OpcmContractsContainer           common.Address `json:"OPCMContractsContainer"`
+	OpcmGameTypeAdder                common.Address `json:"OPCMGameTypeAdder"`
+	OpcmDeployer                     common.Address `json:"OPCMDeployer"`
+	OpcmUpgrader                     common.Address `json:"OPCMUpgrader"`
+	OpcmInteropMigrator              common.Address `json:"OPCMInteropMigrator"`
+	OpcmStandardValidator            common.Address `json:"OPCMStandardValidator"`
+	OpcmUtils                        common.Address `json:"OPCMUtils"`
+	OpcmV2                           common.Address `json:"OPCMV2"`
+	OpcmContainer                    common.Address `json:"OPCMContainer"`
 	DelayedWETHImpl                  common.Address `json:"DelayedWETHImpl"`
 	OptimismPortalImpl               common.Address `json:"OptimismPortalImpl"`
+	OptimismPortalInteropImpl        common.Address `json:"OptimismPortalInteropImpl"`
+	ETHLockboxImpl                   common.Address `json:"ETHLockboxImpl"`
 	PreimageOracleSingleton          common.Address `json:"PreimageOracleSingleton"`
 	MipsSingleton                    common.Address `json:"MipsSingleton"`
 	SystemConfigImpl                 common.Address `json:"SystemConfigImpl"`
@@ -21,6 +32,14 @@ type Implementations struct {
 	L1StandardBridgeImpl             common.Address `json:"L1StandardBridgeImpl"`
 	OptimismMintableERC20FactoryImpl common.Address `json:"OptimismMintableERC20FactoryImpl"`
 	DisputeGameFactoryImpl           common.Address `json:"DisputeGameFactoryImpl"`
+	AnchorStateRegistryImpl          common.Address `json:"AnchorStateRegistryImpl"`
+	SuperchainConfigImpl             common.Address `json:"SuperchainConfigImpl"`
+	ProtocolVersionsImpl             common.Address `json:"ProtocolVersionsImpl"`
+	FaultDisputeGameV2Impl           common.Address `json:"FaultDisputeGameV2Impl"`
+	PermissionedDisputeGameV2Impl    common.Address `json:"PermissionedDisputeGameV2Impl"`
+	SuperFaultDisputeGameImpl        common.Address `json:"SuperFaultDisputeGameImpl"`
+	SuperPermissionedDisputeGameImpl common.Address `json:"SuperPermissionedDisputeGameImpl"`
+	StorageSetterImpl                common.Address `json:"StorageSetterImpl"`
 }
 
 type SuperchainDeployment struct {
@@ -45,13 +64,34 @@ type L2OpchainDeployment struct {
 	L1CrossDomainMessengerProxy       common.Address `json:"L1CrossDomainMessengerProxy"`
 	// Fault proof contracts below.
 	OptimismPortalProxy                common.Address `json:"OptimismPortalProxy"`
+	ETHLockboxProxy                    common.Address `json:"ETHLockboxProxy"`
 	DisputeGameFactoryProxy            common.Address `json:"DisputeGameFactoryProxy"`
 	AnchorStateRegistryProxy           common.Address `json:"AnchorStateRegistryProxy"`
-	AnchorStateRegistryImpl            common.Address `json:"AnchorStateRegistryImpl"`
 	FaultDisputeGame                   common.Address `json:"FaultDisputeGame"`
 	PermissionedDisputeGame            common.Address `json:"PermissionedDisputeGame"`
 	DelayedWETHPermissionedGameProxy   common.Address `json:"DelayedWETHPermissionedGameProxy"`
 	DelayedWETHPermissionlessGameProxy common.Address `json:"DelayedWETHPermissionlessGameProxy"`
+}
+
+func NewL2OPChainDeploymentFromDeployOPChainOutput(output opcm.DeployOPChainOutput) L2OpchainDeployment {
+	return L2OpchainDeployment{
+		OpChainProxyAdmin:                 output.OpChainProxyAdmin,
+		AddressManager:                    output.AddressManager,
+		L1ERC721BridgeProxy:               output.L1ERC721BridgeProxy,
+		SystemConfigProxy:                 output.SystemConfigProxy,
+		OptimismMintableERC20FactoryProxy: output.OptimismMintableERC20FactoryProxy,
+		L1StandardBridgeProxy:             output.L1StandardBridgeProxy,
+		L1CrossDomainMessengerProxy:       output.L1CrossDomainMessengerProxy,
+		// Fault proof contracts below.
+		OptimismPortalProxy:                output.OptimismPortalProxy,
+		ETHLockboxProxy:                    output.EthLockboxProxy,
+		DisputeGameFactoryProxy:            output.DisputeGameFactoryProxy,
+		AnchorStateRegistryProxy:           output.AnchorStateRegistryProxy,
+		FaultDisputeGame:                   output.FaultDisputeGame,
+		PermissionedDisputeGame:            output.PermissionedDisputeGame,
+		DelayedWETHPermissionedGameProxy:   output.DelayedWETHPermissionedGameProxy,
+		DelayedWETHPermissionlessGameProxy: output.DelayedWETHPermissionlessGameProxy,
+	}
 }
 
 type L2Deployment struct {
@@ -61,8 +101,13 @@ type L2Deployment struct {
 	// e.g. a Safe that will own the L2 chain contracts
 }
 
+type InteropDeployment struct {
+	DisputeGameFactory common.Address `json:"DisputeGameFactory"`
+}
+
 type WorldDeployment struct {
 	L1         *L1Deployment            `json:"L1"`
 	Superchain *SuperchainDeployment    `json:"Superchain"`
 	L2s        map[string]*L2Deployment `json:"L2s"`
+	Interop    *InteropDeployment       `json:"Interop"`
 }

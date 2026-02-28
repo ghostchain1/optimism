@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/holiman/uint256"
+
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -16,8 +18,12 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
-var setterFnSig = "set(bytes4,address)"
-var setterFnBytes4 = bytes4(setterFnSig)
+var setAddressFnSig = "set(bytes4,address)"
+var setAddressFnBytes4 = bytes4(setAddressFnSig)
+var setBoolFnSig = "set(bytes4,bool)"
+var setBoolFnBytes4 = bytes4(setBoolFnSig)
+var setUint32FnSig = "set(bytes4,uint32)"
+var setUint32FnBytes4 = bytes4(setUint32FnSig)
 
 // precompileFunc is a prepared function to perform a method call / field read with ABI decoding/encoding.
 type precompileFunc struct {
@@ -72,6 +78,8 @@ type Precompile[E any] struct {
 
 	// abiMethods is effectively the jump-table for 4-byte ABI calls to the precompile.
 	abiMethods map[[4]byte]*precompileFunc
+
+	name string
 }
 
 var _ vm.PrecompiledContract = (*Precompile[struct{}])(nil)
@@ -101,6 +109,7 @@ func NewPrecompile[E any](e E, opts ...PrecompileOption[E]) (*Precompile[E], err
 		fieldsOnly:  false,
 		fieldSetter: false,
 		settable:    make(map[[4]byte]*settableField),
+		name:        reflect.TypeOf(e).Name(),
 	}
 	for _, opt := range opts {
 		opt(out)
@@ -182,7 +191,7 @@ func hasTrailingError(argCount int, getType func(i int) reflect.Type) bool {
 		return false
 	}
 	lastTyp := getType(argCount - 1)
-	return lastTyp.Kind() == reflect.Interface && lastTyp.Implements(typeFor[error]())
+	return lastTyp.Kind() == reflect.Interface && lastTyp.Implements(reflect.TypeFor[error]())
 }
 
 // setupMethod takes a method definition, attached to selfVal,
@@ -350,7 +359,9 @@ func goTypeToABIType(typ reflect.Type) (abi.Type, error) {
 // since big.Int interpretation defaults to uint256.
 type ABIInt256 big.Int
 
-var abiInt256Type = typeFor[ABIInt256]()
+var abiInt256Type = reflect.TypeFor[ABIInt256]()
+
+var abiUint256Type = reflect.TypeFor[uint256.Int]()
 
 // goTypeToSolidityType converts a Go type to the solidity ABI type definition.
 // The "internalType" is a quirk of the Geth ABI utils, for nested structures.
@@ -364,6 +375,9 @@ func goTypeToSolidityType(typ reflect.Type) (typeDef, internalType string, err e
 		reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return strings.ToLower(typ.Kind().String()), "", nil
 	case reflect.Array:
+		if typ.AssignableTo(abiUint256Type) { // uint256.Int underlying Go type is [4]uint64
+			return "uint256", "", nil
+		}
 		if typ.Elem().Kind() == reflect.Uint8 {
 			if typ.Len() == 20 && typ.Name() == "Address" {
 				return "address", "", nil
@@ -397,7 +411,7 @@ func goTypeToSolidityType(typ reflect.Type) (typeDef, internalType string, err e
 		if typ.AssignableTo(abiInt256Type) {
 			return "int256", "", nil
 		}
-		if typ.ConvertibleTo(typeFor[big.Int]()) {
+		if typ.ConvertibleTo(reflect.TypeFor[big.Int]()) {
 			return "uint256", "", nil
 		}
 		// We can parse into abi.TupleTy in the future, if necessary
@@ -517,7 +531,7 @@ func (p *Precompile[E]) setupStructField(fieldDef *reflect.StructField, fieldVal
 		fn:           fn,
 	}
 	// register field as settable
-	if p.fieldSetter && fieldDef.Type.AssignableTo(typeFor[common.Address]()) {
+	if p.fieldSetter {
 		p.settable[byte4Sig] = &settableField{
 			name:  fieldDef.Name,
 			value: fieldVal,
@@ -530,9 +544,9 @@ func (p *Precompile[E]) setupFieldSetter() {
 	if !p.fieldSetter {
 		return
 	}
-	p.abiMethods[setterFnBytes4] = &precompileFunc{
+	p.abiMethods[setAddressFnBytes4] = &precompileFunc{
 		goName:       "__fieldSetter___",
-		abiSignature: setterFnSig,
+		abiSignature: setAddressFnSig,
 		fn: func(input []byte) ([]byte, error) {
 			if len(input) != 32*2 {
 				return nil, fmt.Errorf("cannot set address field to %d bytes", len(input))
@@ -547,6 +561,50 @@ func (p *Precompile[E]) setupFieldSetter() {
 			}
 			addr := common.Address(input[32*2-20 : 32*2])
 			f.value.Set(reflect.ValueOf(addr))
+			return nil, nil
+		},
+	}
+	p.abiMethods[setBoolFnBytes4] = &precompileFunc{
+		goName:       "__boolSetter___",
+		abiSignature: setBoolFnSig,
+		fn: func(input []byte) ([]byte, error) {
+			if len(input) != 32*2 {
+				return nil, fmt.Errorf("cannot set bool field to %d bytes", len(input))
+			}
+			if [32 - 4]byte(input[4:32]) != ([32 - 4]byte{}) {
+				return nil, fmt.Errorf("unexpected selector content, input: %x", input[:])
+			}
+			selector := [4]byte(input[:4])
+			f, ok := p.settable[selector]
+			if !ok {
+				return nil, fmt.Errorf("unknown bool field selector 0x%x", selector)
+			}
+
+			// Boolean values are 0 or 1 in the last byte of the 32-byte word
+			boolValue := input[63] == 1
+			f.value.Set(reflect.ValueOf(boolValue))
+			return nil, nil
+		},
+	}
+	p.abiMethods[setUint32FnBytes4] = &precompileFunc{
+		goName:       "__uint32Setter___",
+		abiSignature: setUint32FnSig,
+		fn: func(input []byte) ([]byte, error) {
+			if len(input) != 32*2 {
+				return nil, fmt.Errorf("cannot set uint32 field to %d bytes", len(input))
+			}
+			if [32 - 4]byte(input[4:32]) != ([32 - 4]byte{}) {
+				return nil, fmt.Errorf("unexpected selector content, input: %x", input[:])
+			}
+			selector := [4]byte(input[:4])
+			f, ok := p.settable[selector]
+			if !ok {
+				return nil, fmt.Errorf("unknown uint32 field selector 0x%x", selector)
+			}
+
+			// uint32 values are in the last 4 bytes of the 32-byte word
+			uint32Value := binary.BigEndian.Uint32(input[60:64])
+			f.value.Set(reflect.ValueOf(uint32Value))
 			return nil, nil
 		},
 	}
@@ -576,6 +634,10 @@ func (p *Precompile[E]) Run(input []byte) ([]byte, error) {
 	return out, nil
 }
 
+func (p *Precompile[E]) Name() string {
+	return p.name
+}
+
 // revertSelector is the ABI signature of a default error type in solidity.
 var revertSelector = crypto.Keccak256([]byte("Error(string)"))[:4]
 
@@ -587,10 +649,4 @@ func encodeRevert(outErr error) ([]byte, error) {
 	out = append(out, b32(uint64(len(outErrStr)))...) // length of string
 	out = append(out, rightPad32(outErrStr)...)       // the error message string
 	return out, vm.ErrExecutionReverted               // Geth EVM will pick this up as a revert with return-data
-}
-
-// typeFor returns the [Type] that represents the type argument T.
-// Note: not available yet in Go 1.21, but part of std-lib later.
-func typeFor[T any]() reflect.Type {
-	return reflect.TypeOf((*T)(nil)).Elem()
 }

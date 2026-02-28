@@ -1,10 +1,11 @@
 package metrics
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
-
+	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-service/event"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 const Namespace = "op_supervisor"
@@ -14,14 +15,22 @@ type Metricer interface {
 	RecordUp()
 
 	opmetrics.RPCMetricer
+	RecordCrossUnsafe(chainID eth.ChainID, s types.BlockSeal)
+	RecordCrossSafe(chainID eth.ChainID, s types.BlockSeal)
+	RecordLocalSafe(chainID eth.ChainID, s types.BlockSeal)
+	RecordLocalUnsafe(chainID eth.ChainID, s types.BlockSeal)
 
-	CacheAdd(chainID types.ChainID, label string, cacheSize int, evicted bool)
-	CacheGet(chainID types.ChainID, label string, hit bool)
+	CacheAdd(chainID eth.ChainID, label string, cacheSize int, evicted bool)
+	CacheGet(chainID eth.ChainID, label string, hit bool)
 
-	RecordDBEntryCount(chainID types.ChainID, kind string, count int64)
-	RecordDBSearchEntriesRead(chainID types.ChainID, count int64)
+	RecordDBEntryCount(chainID eth.ChainID, kind string, count int64)
+	RecordDBSearchEntriesRead(chainID eth.ChainID, count int64)
+
+	RecordAccessListVerifyFailure(chainID eth.ChainID)
 
 	Document() []opmetrics.DocumentedMetric
+
+	event.Metrics
 }
 
 type Metrics struct {
@@ -29,7 +38,10 @@ type Metrics struct {
 	registry *prometheus.Registry
 	factory  opmetrics.Factory
 
+	*event.EventMetricsTracker
+
 	opmetrics.RPCMetrics
+	RefMetrics opmetrics.RefMetricsWithChainID
 
 	CacheSizeVec *prometheus.GaugeVec
 	CacheGetVec  *prometheus.CounterVec
@@ -38,11 +50,14 @@ type Metrics struct {
 	DBEntryCountVec        *prometheus.GaugeVec
 	DBSearchEntriesReadVec *prometheus.HistogramVec
 
+	AccessListVerifyFailureVec *prometheus.CounterVec
+
 	info prometheus.GaugeVec
 	up   prometheus.Gauge
 }
 
 var _ Metricer = (*Metrics)(nil)
+var _ event.Metrics = (*Metrics)(nil)
 
 // implements the Registry getter, for metrics HTTP server to hook into
 var _ opmetrics.RegistryMetricer = (*Metrics)(nil)
@@ -61,7 +76,9 @@ func NewMetrics(procName string) *Metrics {
 		registry: registry,
 		factory:  factory,
 
-		RPCMetrics: opmetrics.MakeRPCMetrics(ns, factory),
+		EventMetricsTracker: event.NewMetricsTracker(ns, factory),
+		RPCMetrics:          opmetrics.MakeRPCMetrics(ns, factory),
+		RefMetrics:          opmetrics.MakeRefMetricsWithChainID(ns, factory),
 
 		info: *factory.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns,
@@ -119,6 +136,13 @@ func NewMetrics(procName string) *Metrics {
 		}, []string{
 			"chain",
 		}),
+		AccessListVerifyFailureVec: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns,
+			Name:      "access_list_verify_failure",
+			Help:      "Number of access list verify failures",
+		}, []string{
+			"chain",
+		}),
 	}
 }
 
@@ -137,11 +161,26 @@ func (m *Metrics) RecordInfo(version string) {
 
 // RecordUp sets the up metric to 1.
 func (m *Metrics) RecordUp() {
-	prometheus.MustRegister()
 	m.up.Set(1)
 }
 
-func (m *Metrics) CacheAdd(chainID types.ChainID, label string, cacheSize int, evicted bool) {
+func (m *Metrics) RecordCrossUnsafe(chainID eth.ChainID, seal types.BlockSeal) {
+	m.RefMetrics.RecordRef("l2", "cross_unsafe", seal.Number, seal.Timestamp, seal.Hash, chainID)
+}
+
+func (m *Metrics) RecordCrossSafe(chainID eth.ChainID, seal types.BlockSeal) {
+	m.RefMetrics.RecordRef("l2", "cross_safe", seal.Number, seal.Timestamp, seal.Hash, chainID)
+}
+
+func (m *Metrics) RecordLocalSafe(chainID eth.ChainID, seal types.BlockSeal) {
+	m.RefMetrics.RecordRef("l2", "local_safe", seal.Number, seal.Timestamp, seal.Hash, chainID)
+}
+
+func (m *Metrics) RecordLocalUnsafe(chainID eth.ChainID, seal types.BlockSeal) {
+	m.RefMetrics.RecordRef("l2", "local_unsafe", seal.Number, seal.Timestamp, seal.Hash, chainID)
+}
+
+func (m *Metrics) CacheAdd(chainID eth.ChainID, label string, cacheSize int, evicted bool) {
 	chain := chainIDLabel(chainID)
 	m.CacheSizeVec.WithLabelValues(chain, label).Set(float64(cacheSize))
 	if evicted {
@@ -151,7 +190,7 @@ func (m *Metrics) CacheAdd(chainID types.ChainID, label string, cacheSize int, e
 	}
 }
 
-func (m *Metrics) CacheGet(chainID types.ChainID, label string, hit bool) {
+func (m *Metrics) CacheGet(chainID eth.ChainID, label string, hit bool) {
 	chain := chainIDLabel(chainID)
 	if hit {
 		m.CacheGetVec.WithLabelValues(chain, label, "true").Inc()
@@ -160,14 +199,18 @@ func (m *Metrics) CacheGet(chainID types.ChainID, label string, hit bool) {
 	}
 }
 
-func (m *Metrics) RecordDBEntryCount(chainID types.ChainID, kind string, count int64) {
+func (m *Metrics) RecordDBEntryCount(chainID eth.ChainID, kind string, count int64) {
 	m.DBEntryCountVec.WithLabelValues(chainIDLabel(chainID), kind).Set(float64(count))
 }
 
-func (m *Metrics) RecordDBSearchEntriesRead(chainID types.ChainID, count int64) {
+func (m *Metrics) RecordDBSearchEntriesRead(chainID eth.ChainID, count int64) {
 	m.DBSearchEntriesReadVec.WithLabelValues(chainIDLabel(chainID)).Observe(float64(count))
 }
 
-func chainIDLabel(chainID types.ChainID) string {
+func chainIDLabel(chainID eth.ChainID) string {
 	return chainID.String()
+}
+
+func (m *Metrics) RecordAccessListVerifyFailure(chainID eth.ChainID) {
+	m.AccessListVerifyFailureVec.WithLabelValues(chainIDLabel(chainID)).Inc()
 }

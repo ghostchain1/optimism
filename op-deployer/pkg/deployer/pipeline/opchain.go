@@ -1,25 +1,20 @@
 package pipeline
 
 import (
-	"context"
-	"encoding/hex"
-	"errors"
 	"fmt"
+	"math/big"
 
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/artifacts"
-
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-func DeployOPChainLiveStrategy(ctx context.Context, env *Env, bundle ArtifactsBundle, intent *state.Intent, st *state.State, chainID common.Hash) error {
-	lgr := env.Logger.New("stage", "deploy-opchain", "strategy", "live")
+func DeployOPChain(env *Env, intent *state.Intent, st *state.State, chainID common.Hash) error {
+	lgr := env.Logger.New("stage", "deploy-opchain")
 
 	if !shouldDeployOPChain(st, chainID) {
 		lgr.Info("opchain deployment not needed")
@@ -30,207 +25,71 @@ func DeployOPChainLiveStrategy(ctx context.Context, env *Env, bundle ArtifactsBu
 	if err != nil {
 		return fmt.Errorf("failed to get chain intent: %w", err)
 	}
-
-	var deployFunc func() (opcm.DeployOPChainOutput, error)
-	switch intent.L1ContractsLocator.Tag {
-	case standard.ContractsV160Tag, standard.ContractsV170Beta1L2Tag:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIV160(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			return opcm.DeployOPChainRawV160(ctx,
-				env.L1Client,
-				env.Broadcaster,
-				env.Deployer,
-				bundle.L1,
-				input,
-			)
-		}
-	default:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIIsthmus(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			return opcm.DeployOPChainRawIsthmus(ctx,
-				env.L1Client,
-				env.Broadcaster,
-				env.Deployer,
-				bundle.L1,
-				input,
-			)
-		}
-	}
-
-	var dco opcm.DeployOPChainOutput
-	lgr.Info("deploying OP chain using existing OPCM", "id", chainID.Hex(), "opcmAddress", st.ImplementationsDeployment.OpcmProxyAddress.Hex())
-	dco, err = deployFunc()
-	if err != nil {
-		return fmt.Errorf("error deploying OP chain: %w", err)
-	}
-
-	st.Chains = append(st.Chains, makeChainState(chainID, dco))
-	opcmProxyAddress := st.ImplementationsDeployment.OpcmProxyAddress
-	err = conditionallySetImplementationAddresses(ctx, env.L1Client, intent, st, dco, opcmProxyAddress)
-	if err != nil {
-		return fmt.Errorf("failed to set implementation addresses: %w", err)
-	}
-
-	return nil
-}
-
-// Only try to set the implementation addresses if we reused existing implementations from a release tag.
-// The reason why these addresses could be empty is because only DeployOPChain.s.sol is invoked as part of the pipeline.
-func conditionallySetImplementationAddresses(ctx context.Context, client *ethclient.Client, intent *state.Intent, st *state.State, dco opcm.DeployOPChainOutput, opcmProxyAddress common.Address) error {
-	if !intent.L1ContractsLocator.IsTag() {
-		return nil
-	}
-
-	block, err := client.BlockByNumber(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to get latest block by number: %w", err)
-	}
-	currentBlockHash := block.Hash()
-
-	errCh := make(chan error, 8)
-
-	setImplementationAddressTasks := []func(){
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.DelayedWETHPermissionedGameProxy, currentBlockHash, &st.ImplementationsDeployment.DelayedWETHImplAddress)
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.OptimismPortalProxy, currentBlockHash, &st.ImplementationsDeployment.OptimismPortalImplAddress)
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.SystemConfigProxy, currentBlockHash, &st.ImplementationsDeployment.SystemConfigImplAddress)
-		},
-		func() {
-			setRDPImplementationAddress(ctx, client, errCh, dco.AddressManager, &st.ImplementationsDeployment.L1CrossDomainMessengerImplAddress, "OVM_L1CrossDomainMessenger")
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.L1ERC721BridgeProxy, currentBlockHash, &st.ImplementationsDeployment.L1ERC721BridgeImplAddress)
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.L1StandardBridgeProxy, currentBlockHash, &st.ImplementationsDeployment.L1StandardBridgeImplAddress)
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.OptimismMintableERC20FactoryProxy, currentBlockHash, &st.ImplementationsDeployment.OptimismMintableERC20FactoryImplAddress)
-		},
-		func() {
-			setEIP1967ImplementationAddress(ctx, client, errCh, dco.DisputeGameFactoryProxy, currentBlockHash, &st.ImplementationsDeployment.DisputeGameFactoryImplAddress)
-		},
-		func() {
-			setMipsSingletonAddress(ctx, client, intent.L1ContractsLocator, errCh, opcmProxyAddress, &st.ImplementationsDeployment.MipsSingletonAddress)
-			setPreimageOracleAddress(ctx, client, errCh, st.ImplementationsDeployment.MipsSingletonAddress, &st.ImplementationsDeployment.PreimageOracleSingletonAddress)
-		},
-	}
-
-	for _, task := range setImplementationAddressTasks {
-		go task()
-	}
-
-	var lastTaskErr error
-	for i := 0; i < len(setImplementationAddressTasks); i++ {
-		taskErr := <-errCh
-		if taskErr != nil {
-			lastTaskErr = taskErr
-		}
-	}
-	if lastTaskErr != nil {
-		return fmt.Errorf("failed to set implementation addresses: %w", lastTaskErr)
-	}
-
-	return nil
-}
-
-func setMipsSingletonAddress(ctx context.Context, client *ethclient.Client, l1ArtifactsLocator *artifacts.Locator, errCh chan error, opcmProxyAddress common.Address, singletonAddress *common.Address) {
-	if !l1ArtifactsLocator.IsTag() {
-		errCh <- errors.New("L1 contracts locator is not a tag, cannot set MIPS singleton address")
-		return
-	}
-	opcmContract := opcm.NewContract(opcmProxyAddress, client)
-	mipsSingletonAddress, err := opcmContract.GetOPCMImplementationAddress(ctx, l1ArtifactsLocator.Tag, "MIPS")
-
-	if err == nil {
-		*singletonAddress = mipsSingletonAddress
-	}
-	errCh <- err
-}
-
-func setPreimageOracleAddress(ctx context.Context, client *ethclient.Client, errCh chan error, mipsSingletonAddress common.Address, preimageOracleAddress *common.Address) {
-	opcmContract := opcm.NewContract(mipsSingletonAddress, client)
-	preimageOracle, err := opcmContract.GenericAddressGetter(ctx, "oracle")
-	if err == nil {
-		*preimageOracleAddress = preimageOracle
-	}
-	errCh <- err
-}
-
-func DeployOPChainGenesisStrategy(env *Env, intent *state.Intent, st *state.State, chainID common.Hash) error {
-	lgr := env.Logger.New("stage", "deploy-opchain", "strategy", "genesis")
-
-	if !shouldDeployOPChain(st, chainID) {
-		lgr.Info("opchain deployment not needed")
-		return nil
-	}
-
-	thisIntent, err := intent.Chain(chainID)
-	if err != nil {
-		return fmt.Errorf("failed to get chain intent: %w", err)
-	}
-
-	var deployFunc func() (opcm.DeployOPChainOutput, error)
-	switch intent.L1ContractsLocator.Tag {
-	case standard.ContractsV160Tag, standard.ContractsV170Beta1L2Tag:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIV160(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			return opcm.DeployOPChainV160(env.L1ScriptHost, input)
-		}
-	default:
-		deployFunc = func() (opcm.DeployOPChainOutput, error) {
-			input, err := makeDCIIsthmus(intent, thisIntent, chainID, st)
-			if err != nil {
-				return opcm.DeployOPChainOutput{}, fmt.Errorf("error making deploy OP chain input: %w", err)
-			}
-
-			return opcm.DeployOPChainIsthmus(env.L1ScriptHost, input)
-		}
-	}
-
-	env.L1ScriptHost.ImportState(st.L1StateDump.Data)
 
 	var dco opcm.DeployOPChainOutput
 	lgr.Info("deploying OP chain using local allocs", "id", chainID.Hex())
-	dco, err = deployFunc()
+
+	dci, err := makeDCI(intent, thisIntent, chainID, st)
+	if err != nil {
+		return fmt.Errorf("error making deploy OP chain input: %w", err)
+	}
+
+	dco, err = env.Scripts.DeployOPChain.Run(dci)
 	if err != nil {
 		return fmt.Errorf("error deploying OP chain: %w", err)
 	}
 
-	st.Chains = append(st.Chains, makeChainState(chainID, dco))
+	readInput := opcm.ReadImplementationAddressesInput{
+		AddressManager:                    dco.AddressManager,
+		L1ERC721BridgeProxy:               dco.L1ERC721BridgeProxy,
+		SystemConfigProxy:                 dco.SystemConfigProxy,
+		OptimismMintableERC20FactoryProxy: dco.OptimismMintableERC20FactoryProxy,
+		L1StandardBridgeProxy:             dco.L1StandardBridgeProxy,
+		OptimismPortalProxy:               dco.OptimismPortalProxy,
+		DisputeGameFactoryProxy:           dco.DisputeGameFactoryProxy,
+		DelayedWETHPermissionedGameProxy:  dco.DelayedWETHPermissionedGameProxy,
+		Opcm:                              dci.Opcm,
+	}
+
+	readImplementations, err := opcm.NewReadImplementationAddressesScript(env.L1ScriptHost)
+	if err != nil {
+		return fmt.Errorf("failed to load ReadImplementationAddresses script: %w", err)
+	}
+
+	impls, err := readImplementations.Run(readInput)
+	if err != nil {
+		return fmt.Errorf("failed to run ReadImplementationAddresses script: %w", err)
+	}
+
+	st.Chains = append(st.Chains, makeChainState(chainID, impls, dco))
+
+	st.ImplementationsDeployment.DelayedWethImpl = impls.DelayedWETH
+	st.ImplementationsDeployment.OptimismPortalImpl = impls.OptimismPortal
+	st.ImplementationsDeployment.OptimismPortalInteropImpl = impls.OptimismPortalInterop
+	st.ImplementationsDeployment.EthLockboxImpl = impls.EthLockbox
+	st.ImplementationsDeployment.SystemConfigImpl = impls.SystemConfig
+	st.ImplementationsDeployment.AnchorStateRegistryImpl = impls.AnchorStateRegistry
+	st.ImplementationsDeployment.L1CrossDomainMessengerImpl = impls.L1CrossDomainMessenger
+	st.ImplementationsDeployment.L1Erc721BridgeImpl = impls.L1ERC721Bridge
+	st.ImplementationsDeployment.L1StandardBridgeImpl = impls.L1StandardBridge
+	st.ImplementationsDeployment.OptimismMintableErc20FactoryImpl = impls.OptimismMintableERC20Factory
+	st.ImplementationsDeployment.DisputeGameFactoryImpl = impls.DisputeGameFactory
+	st.ImplementationsDeployment.MipsImpl = impls.MipsSingleton
+	st.ImplementationsDeployment.PreimageOracleImpl = impls.PreimageOracleSingleton
+	st.ImplementationsDeployment.FaultDisputeGameV2Impl = impls.FaultDisputeGameV2
+	st.ImplementationsDeployment.PermissionedDisputeGameV2Impl = impls.PermissionedDisputeGameV2
+	st.ImplementationsDeployment.OpcmDeployerImpl = impls.OpcmDeployer
+	st.ImplementationsDeployment.OpcmGameTypeAdderImpl = impls.OpcmGameTypeAdder
+	st.ImplementationsDeployment.OpcmUpgraderImpl = impls.OpcmUpgrader
+	st.ImplementationsDeployment.OpcmInteropMigratorImpl = impls.OpcmInteropMigrator
+	st.ImplementationsDeployment.OpcmStandardValidatorImpl = impls.OpcmStandardValidator
 
 	return nil
 }
 
-type ChainProofParams struct {
-	DisputeGameType                         uint32      `json:"disputeGameType" toml:"disputeGameType"`
-	DisputeAbsolutePrestate                 common.Hash `json:"disputeAbsolutePrestate" toml:"disputeAbsolutePrestate"`
-	DisputeMaxGameDepth                     uint64      `json:"disputeMaxGameDepth" toml:"disputeMaxGameDepth"`
-	DisputeSplitDepth                       uint64      `json:"disputeSplitDepth" toml:"disputeSplitDepth"`
-	DisputeClockExtension                   uint64      `json:"disputeClockExtension" toml:"disputeClockExtension"`
-	DisputeMaxClockDuration                 uint64      `json:"disputeMaxClockDuration" toml:"disputeMaxClockDuration"`
-	DangerouslyAllowCustomDisputeParameters bool        `json:"dangerouslyAllowCustomDisputeParameters" toml:"dangerouslyAllowCustomDisputeParameters"`
-}
-
-func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInputV160, error) {
+func makeDCI(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInput, error) {
 	proofParams, err := jsonutil.MergeJSON(
-		ChainProofParams{
+		state.ChainProofParams{
 			DisputeGameType:         standard.DisputeGameType,
 			DisputeAbsolutePrestate: standard.DisputeAbsolutePrestate,
 			DisputeMaxGameDepth:     standard.DisputeMaxGameDepth,
@@ -242,10 +101,19 @@ func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID co
 		thisIntent.DeployOverrides,
 	)
 	if err != nil {
-		return opcm.DeployOPChainInputV160{}, fmt.Errorf("error merging proof params from overrides: %w", err)
+		return opcm.DeployOPChainInput{}, fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
-	return opcm.DeployOPChainInputV160{
+	// Select which OPCM to use based on dev feature flag
+	opcmAddr := st.ImplementationsDeployment.OpcmImpl
+	if devFeatureBitmap, ok := intent.GlobalDeployOverrides["devFeatureBitmap"].(common.Hash); ok {
+		opcmV2Flag := common.HexToHash("0x0000000000000000000000000000000000000000000000000000000000010000")
+		if isDevFeatureEnabled(devFeatureBitmap, opcmV2Flag) && st.ImplementationsDeployment.OpcmV2Impl != (common.Address{}) {
+			opcmAddr = st.ImplementationsDeployment.OpcmV2Impl
+		}
+	}
+
+	return opcm.DeployOPChainInput{
 		OpChainProxyAdminOwner:       thisIntent.Roles.L1ProxyAdminOwner,
 		SystemConfigOwner:            thisIntent.Roles.SystemConfigOwner,
 		Batcher:                      thisIntent.Roles.Batcher,
@@ -255,77 +123,51 @@ func makeDCIV160(intent *state.Intent, thisIntent *state.ChainIntent, chainID co
 		BasefeeScalar:                standard.BasefeeScalar,
 		BlobBaseFeeScalar:            standard.BlobBaseFeeScalar,
 		L2ChainId:                    chainID.Big(),
-		OpcmProxy:                    st.ImplementationsDeployment.OpcmProxyAddress,
+		Opcm:                         opcmAddr,
 		SaltMixer:                    st.Create2Salt.String(), // passing through salt generated at state initialization
-		GasLimit:                     standard.GasLimit,
+		GasLimit:                     thisIntent.GasLimit,
 		DisputeGameType:              proofParams.DisputeGameType,
 		DisputeAbsolutePrestate:      proofParams.DisputeAbsolutePrestate,
-		DisputeMaxGameDepth:          proofParams.DisputeMaxGameDepth,
-		DisputeSplitDepth:            proofParams.DisputeSplitDepth,
+		DisputeMaxGameDepth:          new(big.Int).SetUint64(proofParams.DisputeMaxGameDepth),
+		DisputeSplitDepth:            new(big.Int).SetUint64(proofParams.DisputeSplitDepth),
 		DisputeClockExtension:        proofParams.DisputeClockExtension,   // 3 hours (input in seconds)
 		DisputeMaxClockDuration:      proofParams.DisputeMaxClockDuration, // 3.5 days (input in seconds)
 		AllowCustomDisputeParameters: proofParams.DangerouslyAllowCustomDisputeParameters,
+		OperatorFeeScalar:            thisIntent.OperatorFeeScalar,
+		OperatorFeeConstant:          thisIntent.OperatorFeeConstant,
+		UseCustomGasToken:            thisIntent.IsCustomGasTokenEnabled(),
 	}, nil
 }
 
-func makeDCIIsthmus(intent *state.Intent, thisIntent *state.ChainIntent, chainID common.Hash, st *state.State) (opcm.DeployOPChainInputIsthmus, error) {
-	dci, err := makeDCIV160(intent, thisIntent, chainID, st)
-	if err != nil {
-		return opcm.DeployOPChainInputIsthmus{}, fmt.Errorf("error making deploy OP chain input: %w", err)
+func makeChainState(chainID common.Hash, impls opcm.ReadImplementationAddressesOutput, dco opcm.DeployOPChainOutput) *state.ChainState {
+	opChainContracts := addresses.OpChainContracts{}
+	opChainContracts.OpChainProxyAdminImpl = dco.OpChainProxyAdmin
+	opChainContracts.AddressManagerImpl = dco.AddressManager
+	opChainContracts.L1Erc721BridgeProxy = dco.L1ERC721BridgeProxy
+	opChainContracts.SystemConfigProxy = dco.SystemConfigProxy
+	opChainContracts.OptimismMintableErc20FactoryProxy = dco.OptimismMintableERC20FactoryProxy
+	opChainContracts.L1StandardBridgeProxy = dco.L1StandardBridgeProxy
+	opChainContracts.L1CrossDomainMessengerProxy = dco.L1CrossDomainMessengerProxy
+	opChainContracts.OptimismPortalProxy = dco.OptimismPortalProxy
+	opChainContracts.EthLockboxProxy = dco.EthLockboxProxy
+	opChainContracts.DisputeGameFactoryProxy = dco.DisputeGameFactoryProxy
+	opChainContracts.AnchorStateRegistryProxy = dco.AnchorStateRegistryProxy
+	opChainContracts.FaultDisputeGameImpl = dco.FaultDisputeGame
+	opChainContracts.PermissionedDisputeGameImpl = dco.PermissionedDisputeGame
+	opChainContracts.DelayedWethPermissionedGameProxy = dco.DelayedWETHPermissionedGameProxy
+	opChainContracts.DelayedWethPermissionlessGameProxy = dco.DelayedWETHPermissionlessGameProxy
+
+	if (impls.PermissionedDisputeGameV2 != common.Address{}) {
+		opChainContracts.PermissionedDisputeGameImpl = impls.PermissionedDisputeGameV2
+	}
+	if (impls.FaultDisputeGameV2 != common.Address{}) {
+		opChainContracts.FaultDisputeGameImpl = impls.FaultDisputeGameV2
 	}
 
-	return opcm.DeployOPChainInputIsthmus{
-		DeployOPChainInputV160: dci,
-		SystemConfigFeeAdmin:   common.Address{'D', 'E', 'A', 'D'},
-	}, nil
-}
-
-func makeChainState(chainID common.Hash, dco opcm.DeployOPChainOutput) *state.ChainState {
 	return &state.ChainState{
-		ID:                                        chainID,
-		ProxyAdminAddress:                         dco.OpChainProxyAdmin,
-		AddressManagerAddress:                     dco.AddressManager,
-		L1ERC721BridgeProxyAddress:                dco.L1ERC721BridgeProxy,
-		SystemConfigProxyAddress:                  dco.SystemConfigProxy,
-		OptimismMintableERC20FactoryProxyAddress:  dco.OptimismMintableERC20FactoryProxy,
-		L1StandardBridgeProxyAddress:              dco.L1StandardBridgeProxy,
-		L1CrossDomainMessengerProxyAddress:        dco.L1CrossDomainMessengerProxy,
-		OptimismPortalProxyAddress:                dco.OptimismPortalProxy,
-		DisputeGameFactoryProxyAddress:            dco.DisputeGameFactoryProxy,
-		AnchorStateRegistryProxyAddress:           dco.AnchorStateRegistryProxy,
-		AnchorStateRegistryImplAddress:            dco.AnchorStateRegistryImpl,
-		FaultDisputeGameAddress:                   dco.FaultDisputeGame,
-		PermissionedDisputeGameAddress:            dco.PermissionedDisputeGame,
-		DelayedWETHPermissionedGameProxyAddress:   dco.DelayedWETHPermissionedGameProxy,
-		DelayedWETHPermissionlessGameProxyAddress: dco.DelayedWETHPermissionlessGameProxy,
+		ID:               chainID,
+		OpChainContracts: opChainContracts,
 	}
-}
-
-func setRDPImplementationAddress(ctx context.Context, client *ethclient.Client, errCh chan error, addressManager common.Address, implAddress *common.Address, getNameArg string) {
-	if *implAddress != (common.Address{}) {
-		errCh <- nil
-		return
-	}
-
-	addressManagerContract := opcm.NewContract(addressManager, client)
-	address, err := addressManagerContract.GetAddressByNameViaAddressManager(ctx, getNameArg)
-	if err == nil {
-		*implAddress = address
-	}
-	errCh <- err
-}
-
-func setEIP1967ImplementationAddress(ctx context.Context, client *ethclient.Client, errCh chan error, proxy common.Address, currentBlockHash common.Hash, implAddress *common.Address) {
-	if *implAddress != (common.Address{}) {
-		errCh <- nil
-		return
-	}
-
-	storageValue, err := client.StorageAtHash(ctx, proxy, genesis.ImplementationSlot, currentBlockHash)
-	if err == nil {
-		*implAddress = common.HexToAddress(hex.EncodeToString(storageValue))
-	}
-	errCh <- err
 }
 
 func shouldDeployOPChain(st *state.State, chainID common.Hash) bool {
@@ -336,4 +178,15 @@ func shouldDeployOPChain(st *state.State, chainID common.Hash) bool {
 	}
 
 	return true
+}
+
+// isDevFeatureEnabled checks if a specific development feature is enabled in a feature bitmap.
+// This mirrors the function in devfeatures.go to avoid import cycles.
+func isDevFeatureEnabled(bitmap, flag common.Hash) bool {
+	b := new(big.Int).SetBytes(bitmap[:])
+	f := new(big.Int).SetBytes(flag[:])
+
+	featuresIsNonZero := f.Cmp(big.NewInt(0)) != 0
+	bitmapContainsFeatures := new(big.Int).And(b, f).Cmp(f) == 0
+	return featuresIsNonZero && bitmapContainsFeatures
 }

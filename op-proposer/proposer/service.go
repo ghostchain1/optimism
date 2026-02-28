@@ -11,8 +11,10 @@ import (
 
 	"github.com/ethereum-optimism/optimism/op-proposer/metrics"
 	"github.com/ethereum-optimism/optimism/op-proposer/proposer/rpc"
+	"github.com/ethereum-optimism/optimism/op-proposer/proposer/source"
 	opservice "github.com/ethereum-optimism/optimism/op-service"
 	"github.com/ethereum-optimism/optimism/op-service/cliapp"
+	"github.com/ethereum-optimism/optimism/op-service/client"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/httputil"
 	opmetrics "github.com/ethereum-optimism/optimism/op-service/metrics"
@@ -46,6 +48,15 @@ type ProposerConfig struct {
 	// This option is not necessary when higher proposal latency is acceptable and L1 is healthy.
 	AllowNonFinalized bool
 
+	// GuardURL is an optional HTTP endpoint to vet proposals.
+	GuardURL string
+
+	// GuardTimeout bounds the guard request.
+	GuardTimeout time.Duration
+
+	// GuardFailOpen continues proposal submission when the guard is unreachable if true.
+	GuardFailOpen bool
+
 	WaitNodeSync bool
 }
 
@@ -57,7 +68,7 @@ type ProposerService struct {
 
 	TxManager      txmgr.TxManager
 	L1Client       *ethclient.Client
-	RollupProvider dial.RollupProvider
+	ProposalSource source.ProposalSource
 
 	driver *L2OutputSubmitter
 
@@ -68,6 +79,8 @@ type ProposerService struct {
 	rpcServer    *oprpc.Server
 
 	balanceMetricer io.Closer
+
+	guard GuardClient
 
 	stopped atomic.Bool
 }
@@ -92,6 +105,9 @@ func (ps *ProposerService) initFromCLIConfig(ctx context.Context, version string
 	ps.PollInterval = cfg.PollInterval
 	ps.NetworkTimeout = cfg.TxMgrConfig.NetworkTimeout
 	ps.AllowNonFinalized = cfg.AllowNonFinalized
+	ps.GuardURL = cfg.GuardURL
+	ps.GuardTimeout = cfg.GuardTimeout
+	ps.GuardFailOpen = cfg.GuardFailOpen
 	ps.WaitNodeSync = cfg.WaitNodeSync
 
 	ps.initL2ooAddress(cfg)
@@ -110,6 +126,7 @@ func (ps *ProposerService) initFromCLIConfig(ctx context.Context, version string
 	if err := ps.initPProf(cfg); err != nil {
 		return fmt.Errorf("failed to init profiling: %w", err)
 	}
+	ps.guard = ps.initGuard(cfg)
 	if err := ps.initDriver(); err != nil {
 		return fmt.Errorf("failed to init Driver: %w", err)
 	}
@@ -129,17 +146,31 @@ func (ps *ProposerService) initRPCClients(ctx context.Context, cfg *CLIConfig) e
 	}
 	ps.L1Client = l1Client
 
-	var rollupProvider dial.RollupProvider
-	if strings.Contains(cfg.RollupRpc, ",") {
-		rollupUrls := strings.Split(cfg.RollupRpc, ",")
-		rollupProvider, err = dial.NewActiveL2RollupProvider(ctx, rollupUrls, cfg.ActiveSequencerCheckDuration, dial.DefaultDialTimeout, ps.Log)
-	} else {
-		rollupProvider, err = dial.NewStaticL2RollupProvider(ctx, ps.Log, cfg.RollupRpc)
+	if cfg.RollupRpc != "" {
+		var rollupProvider dial.RollupProvider
+		if strings.Contains(cfg.RollupRpc, ",") {
+			rollupUrls := strings.Split(cfg.RollupRpc, ",")
+			rollupProvider, err = dial.NewActiveL2RollupProvider(ctx, rollupUrls, cfg.ActiveSequencerCheckDuration, dial.DefaultDialTimeout, ps.Log)
+		} else {
+			rollupProvider, err = dial.NewStaticL2RollupProvider(ctx, ps.Log, cfg.RollupRpc)
+		}
+		if err != nil {
+			return fmt.Errorf("failed to build L2 endpoint provider: %w", err)
+		}
+		ps.ProposalSource = source.NewRollupProposalSource(rollupProvider)
 	}
-	if err != nil {
-		return fmt.Errorf("failed to build L2 endpoint provider: %w", err)
+	if len(cfg.SupervisorRpcs) != 0 {
+		var clients []source.SupervisorClient
+		for _, url := range cfg.SupervisorRpcs {
+			cl, err := dial.DialSupervisorClientWithTimeout(ctx, ps.Log, url,
+				client.WithRPCRecorder(ps.Metrics.NewRecorder("supervisor")))
+			if err != nil {
+				return fmt.Errorf("failed to dial supervisor RPC client (%v): %w", url, err)
+			}
+			clients = append(clients, cl)
+		}
+		ps.ProposalSource = source.NewSupervisorProposalSource(ps.Log, clients...)
 	}
-	ps.RollupProvider = rollupProvider
 	return nil
 }
 
@@ -183,6 +214,21 @@ func (ps *ProposerService) initPProf(cfg *CLIConfig) error {
 	}
 
 	return nil
+}
+
+func (ps *ProposerService) initGuard(cfg *CLIConfig) GuardClient {
+	if cfg.GuardURL == "" {
+		ps.Log.Info("Guard checks disabled")
+		return nil
+	}
+
+	timeout := cfg.GuardTimeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	ps.Log.Info("Guard checks enabled", "url", cfg.GuardURL, "timeout", timeout, "fail_open", cfg.GuardFailOpen)
+	return NewHTTPGuardClient(cfg.GuardURL, timeout, cfg.GuardFailOpen, ps.Log)
 }
 
 func (ps *ProposerService) initMetricsServer(cfg *CLIConfig) error {
@@ -232,7 +278,8 @@ func (ps *ProposerService) initDriver() error {
 		Txmgr:          ps.TxManager,
 		L1Client:       ps.L1Client,
 		Multicaller:    batching.NewMultiCaller(ps.L1Client.Client(), batching.DefaultBatchSize),
-		RollupProvider: ps.RollupProvider,
+		ProposalSource: ps.ProposalSource,
+		Guard:          ps.guard,
 	})
 	if err != nil {
 		return err
@@ -247,9 +294,10 @@ func (ps *ProposerService) initRPCServer(cfg *CLIConfig) error {
 		cfg.RPCConfig.ListenPort,
 		ps.Version,
 		oprpc.WithLogger(ps.Log),
+		oprpc.WithRPCRecorder(ps.Metrics.NewRecorder("main")),
 	)
 	if cfg.RPCConfig.EnableAdmin {
-		adminAPI := rpc.NewAdminAPI(ps.driver, ps.Metrics, ps.Log)
+		adminAPI := rpc.NewAdminAPI(ps.driver, ps.Log)
 		server.AddAPI(rpc.GetAdminAPI(adminAPI))
 		server.AddAPI(ps.TxManager.API())
 		ps.Log.Info("Admin RPC enabled")
@@ -296,7 +344,6 @@ func (ps *ProposerService) Stop(ctx context.Context) error {
 	}
 
 	if ps.rpcServer != nil {
-		// TODO(7685): the op-service RPC server is not built on top of op-service httputil Server, and has poor shutdown
 		if err := ps.rpcServer.Stop(); err != nil {
 			result = errors.Join(result, fmt.Errorf("failed to stop RPC server: %w", err))
 		}
@@ -326,8 +373,8 @@ func (ps *ProposerService) Stop(ctx context.Context) error {
 		ps.L1Client.Close()
 	}
 
-	if ps.RollupProvider != nil {
-		ps.RollupProvider.Close()
+	if ps.ProposalSource != nil {
+		ps.ProposalSource.Close()
 	}
 
 	if result == nil {
@@ -344,4 +391,11 @@ var _ cliapp.Lifecycle = (*ProposerService)(nil)
 // to start/stop/restart the L2Output-submission work, for use in testing.
 func (ps *ProposerService) Driver() rpc.ProposerDriver {
 	return ps.driver
+}
+
+func (ps *ProposerService) HTTPEndpoint() string {
+	if ps.rpcServer == nil {
+		return ""
+	}
+	return "http://" + ps.rpcServer.Endpoint()
 }

@@ -3,79 +3,79 @@ package frontend
 import (
 	"context"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/rpc"
+
+	"github.com/ethereum-optimism/optimism/op-service/apis"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
-	"github.com/ethereum/go-ethereum/common"
 )
 
-type AdminBackend interface {
-	Start(ctx context.Context) error
-	Stop(ctx context.Context) error
-	AddL2RPC(ctx context.Context, rpc string) error
-}
-
-type QueryBackend interface {
-	CheckMessage(identifier types.Identifier, payloadHash common.Hash) (types.SafetyLevel, error)
-	CheckMessages(messages []types.Message, minSafety types.SafetyLevel) error
-	CrossDerivedFrom(ctx context.Context, chainID types.ChainID, derived eth.BlockID) (derivedFrom eth.BlockRef, err error)
-	UnsafeView(ctx context.Context, chainID types.ChainID, unsafe types.ReferenceView) (types.ReferenceView, error)
-	SafeView(ctx context.Context, chainID types.ChainID, safe types.ReferenceView) (types.ReferenceView, error)
-	Finalized(ctx context.Context, chainID types.ChainID) (eth.BlockID, error)
-}
-
-type UpdatesBackend interface {
-	UpdateLocalUnsafe(ctx context.Context, chainID types.ChainID, head eth.BlockRef) error
-	UpdateLocalSafe(ctx context.Context, chainID types.ChainID, derivedFrom eth.BlockRef, lastDerived eth.BlockRef) error
-	UpdateFinalizedL1(ctx context.Context, chainID types.ChainID, finalized eth.BlockRef) error
-}
-
 type Backend interface {
-	AdminBackend
-	QueryBackend
-	UpdatesBackend
+	apis.SupervisorAdminAPI
+	apis.SupervisorQueryAPI
 }
 
 type QueryFrontend struct {
-	Supervisor QueryBackend
+	Supervisor apis.SupervisorQueryAPI
 }
 
-var _ QueryBackend = (*QueryFrontend)(nil)
+var _ apis.SupervisorQueryAPI = (*QueryFrontend)(nil)
 
-// CheckMessage checks the safety-level of an individual message.
-// The payloadHash references the hash of the message-payload of the message.
-func (q *QueryFrontend) CheckMessage(identifier types.Identifier, payloadHash common.Hash) (types.SafetyLevel, error) {
-	return q.Supervisor.CheckMessage(identifier, payloadHash)
+func (q *QueryFrontend) CheckAccessList(ctx context.Context, inboxEntries []common.Hash,
+	minSafety types.SafetyLevel, executingDescriptor types.ExecutingDescriptor) error {
+	err := q.Supervisor.CheckAccessList(ctx, inboxEntries, minSafety, executingDescriptor)
+	if err != nil {
+		return &rpc.JsonError{
+			Code:    types.GetErrorCode(err),
+			Message: err.Error(),
+		}
+	}
+	return nil
 }
 
-// CheckMessage checks the safety-level of a collection of messages,
-// and returns if the minimum safety-level is met for all messages.
-func (q *QueryFrontend) CheckMessages(
-	messages []types.Message,
-	minSafety types.SafetyLevel) error {
-	return q.Supervisor.CheckMessages(messages, minSafety)
+func (q *QueryFrontend) LocalUnsafe(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error) {
+	return q.Supervisor.LocalUnsafe(ctx, chainID)
 }
 
-func (q *QueryFrontend) UnsafeView(ctx context.Context, chainID types.ChainID, unsafe types.ReferenceView) (types.ReferenceView, error) {
-	return q.Supervisor.UnsafeView(ctx, chainID, unsafe)
+func (q *QueryFrontend) LocalSafe(ctx context.Context, chainID eth.ChainID) (types.DerivedIDPair, error) {
+	return q.Supervisor.LocalSafe(ctx, chainID)
 }
 
-func (q *QueryFrontend) SafeView(ctx context.Context, chainID types.ChainID, safe types.ReferenceView) (types.ReferenceView, error) {
-	return q.Supervisor.SafeView(ctx, chainID, safe)
+func (q *QueryFrontend) CrossSafe(ctx context.Context, chainID eth.ChainID) (types.DerivedIDPair, error) {
+	return q.Supervisor.CrossSafe(ctx, chainID)
 }
 
-func (q *QueryFrontend) Finalized(ctx context.Context, chainID types.ChainID) (eth.BlockID, error) {
+func (q *QueryFrontend) Finalized(ctx context.Context, chainID eth.ChainID) (eth.BlockID, error) {
 	return q.Supervisor.Finalized(ctx, chainID)
 }
 
-func (q *QueryFrontend) CrossDerivedFrom(ctx context.Context, chainID types.ChainID, derived eth.BlockID) (derivedFrom eth.BlockRef, err error) {
-	return q.Supervisor.CrossDerivedFrom(ctx, chainID, derived)
+func (q *QueryFrontend) FinalizedL1(ctx context.Context) (eth.BlockRef, error) {
+	return q.Supervisor.FinalizedL1(ctx)
+}
+
+func (q *QueryFrontend) CrossDerivedToSource(ctx context.Context, chainID eth.ChainID, derived eth.BlockID) (derivedFrom eth.BlockRef, err error) {
+	return q.Supervisor.CrossDerivedToSource(ctx, chainID, derived)
+}
+
+func (q *QueryFrontend) SuperRootAtTimestamp(ctx context.Context, timestamp hexutil.Uint64) (eth.SuperRootResponse, error) {
+	return q.Supervisor.SuperRootAtTimestamp(ctx, timestamp)
+}
+
+func (q *QueryFrontend) AllSafeDerivedAt(ctx context.Context, derivedFrom eth.BlockID) (derived map[eth.ChainID]eth.BlockID, err error) {
+	return q.Supervisor.AllSafeDerivedAt(ctx, derivedFrom)
+}
+
+func (q *QueryFrontend) SyncStatus(ctx context.Context) (eth.SupervisorSyncStatus, error) {
+	return q.Supervisor.SyncStatus(ctx)
 }
 
 type AdminFrontend struct {
 	Supervisor Backend
 }
 
-var _ AdminBackend = (*AdminFrontend)(nil)
+var _ apis.SupervisorAdminAPI = (*AdminFrontend)(nil)
 
 // Start starts the service, if it was previously stopped.
 func (a *AdminFrontend) Start(ctx context.Context) error {
@@ -88,24 +88,22 @@ func (a *AdminFrontend) Stop(ctx context.Context) error {
 }
 
 // AddL2RPC adds a new L2 chain to the supervisor backend
-func (a *AdminFrontend) AddL2RPC(ctx context.Context, rpc string) error {
-	return a.Supervisor.AddL2RPC(ctx, rpc)
+func (a *AdminFrontend) AddL2RPC(ctx context.Context, rpc string, jwtSecret eth.Bytes32) error {
+	return a.Supervisor.AddL2RPC(ctx, rpc, jwtSecret)
 }
 
-type UpdatesFrontend struct {
-	Supervisor UpdatesBackend
+// Rewind removes some L2 chain data from the supervisor backend, starting from the given block.
+func (a *AdminFrontend) Rewind(ctx context.Context, chain eth.ChainID, block eth.BlockID) error {
+	// TODO(#15665) add logging here to track when rewinds are requested
+	return a.Supervisor.Rewind(ctx, chain, block)
 }
 
-var _ UpdatesBackend = (*UpdatesFrontend)(nil)
-
-func (u *UpdatesFrontend) UpdateLocalUnsafe(ctx context.Context, chainID types.ChainID, head eth.BlockRef) error {
-	return u.Supervisor.UpdateLocalUnsafe(ctx, chainID, head)
+// SetFailsafeEnabled sets the failsafe mode configuration for the supervisor.
+func (a *AdminFrontend) SetFailsafeEnabled(ctx context.Context, enabled bool) error {
+	return a.Supervisor.SetFailsafeEnabled(ctx, enabled)
 }
 
-func (u *UpdatesFrontend) UpdateLocalSafe(ctx context.Context, chainID types.ChainID, derivedFrom eth.BlockRef, lastDerived eth.BlockRef) error {
-	return u.Supervisor.UpdateLocalSafe(ctx, chainID, derivedFrom, lastDerived)
-}
-
-func (u *UpdatesFrontend) UpdateFinalizedL1(ctx context.Context, chainID types.ChainID, finalized eth.BlockRef) error {
-	return u.Supervisor.UpdateFinalizedL1(ctx, chainID, finalized)
+// GetFailsafeEnabled gets the current failsafe mode configuration for the supervisor.
+func (a *AdminFrontend) GetFailsafeEnabled(ctx context.Context) (bool, error) {
+	return a.Supervisor.GetFailsafeEnabled(ctx)
 }

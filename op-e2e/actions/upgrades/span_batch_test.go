@@ -41,7 +41,7 @@ func TestDropSpanBatchBeforeHardfork(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	// do not activate Delta hardfork for verifier
@@ -131,7 +131,7 @@ func TestHardforkMiddleOfSpanBatch(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 
@@ -246,7 +246,7 @@ func TestAcceptSingularBatchAfterHardfork(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	minTs := hexutil.Uint64(0)
 	dp := e2eutils.MakeDeployParams(t, p)
@@ -333,7 +333,7 @@ func TestMixOfBatchesAfterHardfork(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	minTs := hexutil.Uint64(0)
 	dp := e2eutils.MakeDeployParams(t, p)
@@ -425,7 +425,7 @@ func TestSpanBatchEmptyChain(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	minTs := hexutil.Uint64(0)
@@ -489,7 +489,7 @@ func TestSpanBatchLowThroughputChain(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	dp := e2eutils.MakeDeployParams(t, p)
 	minTs := hexutil.Uint64(0)
@@ -541,7 +541,7 @@ func TestSpanBatchLowThroughputChain(gt *testing.T) {
 				data := make([]byte, rand.Intn(100))
 				_, err := crand.Read(data[:]) // fill with random bytes
 				require.NoError(t, err)
-				gas, err := core.IntrinsicGas(data, nil, false, true, true, false)
+				gas, err := core.IntrinsicGas(data, nil, nil, false, true, true, false)
 				require.NoError(t, err)
 				baseFee := seqEngine.L2Chain().CurrentBlock().BaseFee
 				nonce, err := cl.PendingNonceAt(t.Ctx(), addrs[userIdx])
@@ -604,7 +604,7 @@ func TestBatchEquivalence(gt *testing.T) {
 		SequencerWindowSize: 24,
 		ChannelTimeout:      20,
 		L1BlockTime:         12,
-		AllocType:           config.AllocTypeStandard,
+		AllocType:           config.DefaultAllocType,
 	}
 	// Delta activated deploy config
 	dp := e2eutils.MakeDeployParams(t, p)
@@ -681,7 +681,7 @@ func TestBatchEquivalence(gt *testing.T) {
 			data := make([]byte, rand.Intn(100))
 			_, err := crand.Read(data[:]) // fill with random bytes
 			require.NoError(t, err)
-			gas, err := core.IntrinsicGas(data, nil, false, true, true, false)
+			gas, err := core.IntrinsicGas(data, nil, nil, false, true, true, false)
 			require.NoError(t, err)
 			baseFee := seqEngine.L2Chain().CurrentBlock().BaseFee
 			nonce, err := seqEngCl.PendingNonceAt(t.Ctx(), addrs[userIdx])

@@ -4,21 +4,14 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
+	"github.com/ethereum-optimism/optimism/op-chain-ops/addresses"
 	"github.com/ethereum-optimism/optimism/op-service/jsonutil"
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/opcm"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/state"
 )
-
-type SuperchainProofParams struct {
-	WithdrawalDelaySeconds          uint64 `json:"withdrawalDelaySeconds" toml:"withdrawalDelaySeconds"`
-	MinProposalSizeBytes            uint64 `json:"minProposalSizeBytes" toml:"minProposalSizeBytes"`
-	ChallengePeriodSeconds          uint64 `json:"challengePeriodSeconds" toml:"challengePeriodSeconds"`
-	ProofMaturityDelaySeconds       uint64 `json:"proofMaturityDelaySeconds" toml:"proofMaturityDelaySeconds"`
-	DisputeGameFinalityDelaySeconds uint64 `json:"disputeGameFinalityDelaySeconds" toml:"disputeGameFinalityDelaySeconds"`
-	MIPSVersion                     uint64 `json:"mipsVersion" toml:"mipsVersion"`
-}
 
 func DeployImplementations(env *Env, intent *state.Intent, st *state.State) error {
 	lgr := env.Logger.New("stage", "deploy-implementations")
@@ -30,27 +23,19 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 
 	lgr.Info("deploying implementations")
 
-	var standardVersionsTOML string
-	var contractsRelease string
-	var err error
-	if intent.L1ContractsLocator.IsTag() && intent.DeploymentStrategy == state.DeploymentStrategyLive {
-		standardVersionsTOML, err = standard.L1VersionsDataFor(intent.L1ChainID)
-		if err != nil {
-			return fmt.Errorf("error getting standard versions TOML: %w", err)
-		}
-		contractsRelease = intent.L1ContractsLocator.Tag
-	} else {
-		contractsRelease = "dev"
-	}
-
 	proofParams, err := jsonutil.MergeJSON(
-		SuperchainProofParams{
+		state.SuperchainProofParams{
 			WithdrawalDelaySeconds:          standard.WithdrawalDelaySeconds,
 			MinProposalSizeBytes:            standard.MinProposalSizeBytes,
 			ChallengePeriodSeconds:          standard.ChallengePeriodSeconds,
 			ProofMaturityDelaySeconds:       standard.ProofMaturityDelaySeconds,
 			DisputeGameFinalityDelaySeconds: standard.DisputeGameFinalityDelaySeconds,
+			DisputeMaxGameDepth:             standard.DisputeMaxGameDepth,
+			DisputeSplitDepth:               standard.DisputeSplitDepth,
+			DisputeClockExtension:           standard.DisputeClockExtension,
+			DisputeMaxClockDuration:         standard.DisputeMaxClockDuration,
 			MIPSVersion:                     standard.MIPSVersion,
+			DevFeatureBitmap:                common.Hash{},
 		},
 		intent.GlobalDeployOverrides,
 	)
@@ -58,42 +43,55 @@ func DeployImplementations(env *Env, intent *state.Intent, st *state.State) erro
 		return fmt.Errorf("error merging proof params from overrides: %w", err)
 	}
 
-	env.L1ScriptHost.ImportState(st.L1StateDump.Data)
-
-	dio, err := opcm.DeployImplementations(
-		env.L1ScriptHost,
+	dio, err := env.Scripts.DeployImplementations.Run(
 		opcm.DeployImplementationsInput{
-			Salt:                            st.Create2Salt,
 			WithdrawalDelaySeconds:          new(big.Int).SetUint64(proofParams.WithdrawalDelaySeconds),
 			MinProposalSizeBytes:            new(big.Int).SetUint64(proofParams.MinProposalSizeBytes),
 			ChallengePeriodSeconds:          new(big.Int).SetUint64(proofParams.ChallengePeriodSeconds),
 			ProofMaturityDelaySeconds:       new(big.Int).SetUint64(proofParams.ProofMaturityDelaySeconds),
 			DisputeGameFinalityDelaySeconds: new(big.Int).SetUint64(proofParams.DisputeGameFinalityDelaySeconds),
 			MipsVersion:                     new(big.Int).SetUint64(proofParams.MIPSVersion),
-			Release:                         contractsRelease,
-			SuperchainConfigProxy:           st.SuperchainDeployment.SuperchainConfigProxyAddress,
-			ProtocolVersionsProxy:           st.SuperchainDeployment.ProtocolVersionsProxyAddress,
-			OpcmProxyOwner:                  st.SuperchainDeployment.ProxyAdminAddress,
-			StandardVersionsToml:            standardVersionsTOML,
-			UseInterop:                      intent.UseInterop,
+			DevFeatureBitmap:                proofParams.DevFeatureBitmap,
+			FaultGameV2MaxGameDepth:         new(big.Int).SetUint64(proofParams.DisputeMaxGameDepth),
+			FaultGameV2SplitDepth:           new(big.Int).SetUint64(proofParams.DisputeSplitDepth),
+			FaultGameV2ClockExtension:       new(big.Int).SetUint64(proofParams.DisputeClockExtension),
+			FaultGameV2MaxClockDuration:     new(big.Int).SetUint64(proofParams.DisputeMaxClockDuration),
+			SuperchainConfigProxy:           st.SuperchainDeployment.SuperchainConfigProxy,
+			ProtocolVersionsProxy:           st.SuperchainDeployment.ProtocolVersionsProxy,
+			SuperchainProxyAdmin:            st.SuperchainDeployment.SuperchainProxyAdminImpl,
+			L1ProxyAdminOwner:               st.SuperchainRoles.SuperchainProxyAdminOwner,
+			Challenger:                      st.SuperchainRoles.Challenger,
 		},
 	)
 	if err != nil {
 		return fmt.Errorf("error deploying implementations: %w", err)
 	}
 
-	st.ImplementationsDeployment = &state.ImplementationsDeployment{
-		OpcmProxyAddress:                        dio.OpcmProxy,
-		DelayedWETHImplAddress:                  dio.DelayedWETHImpl,
-		OptimismPortalImplAddress:               dio.OptimismPortalImpl,
-		PreimageOracleSingletonAddress:          dio.PreimageOracleSingleton,
-		MipsSingletonAddress:                    dio.MipsSingleton,
-		SystemConfigImplAddress:                 dio.SystemConfigImpl,
-		L1CrossDomainMessengerImplAddress:       dio.L1CrossDomainMessengerImpl,
-		L1ERC721BridgeImplAddress:               dio.L1ERC721BridgeImpl,
-		L1StandardBridgeImplAddress:             dio.L1StandardBridgeImpl,
-		OptimismMintableERC20FactoryImplAddress: dio.OptimismMintableERC20FactoryImpl,
-		DisputeGameFactoryImplAddress:           dio.DisputeGameFactoryImpl,
+	st.ImplementationsDeployment = &addresses.ImplementationsContracts{
+		OpcmImpl:                         dio.Opcm,
+		OpcmGameTypeAdderImpl:            dio.OpcmGameTypeAdder,
+		OpcmDeployerImpl:                 dio.OpcmDeployer,
+		OpcmUpgraderImpl:                 dio.OpcmUpgrader,
+		OpcmInteropMigratorImpl:          dio.OpcmInteropMigrator,
+		OpcmStandardValidatorImpl:        dio.OpcmStandardValidator,
+		OpcmV2Impl:                       dio.OpcmV2,
+		OpcmContainerImpl:                dio.OpcmContainer,
+		DelayedWethImpl:                  dio.DelayedWETHImpl,
+		OptimismPortalImpl:               dio.OptimismPortalImpl,
+		OptimismPortalInteropImpl:        dio.OptimismPortalInteropImpl,
+		EthLockboxImpl:                   dio.ETHLockboxImpl,
+		PreimageOracleImpl:               dio.PreimageOracleSingleton,
+		MipsImpl:                         dio.MipsSingleton,
+		SystemConfigImpl:                 dio.SystemConfigImpl,
+		L1CrossDomainMessengerImpl:       dio.L1CrossDomainMessengerImpl,
+		L1Erc721BridgeImpl:               dio.L1ERC721BridgeImpl,
+		L1StandardBridgeImpl:             dio.L1StandardBridgeImpl,
+		OptimismMintableErc20FactoryImpl: dio.OptimismMintableERC20FactoryImpl,
+		DisputeGameFactoryImpl:           dio.DisputeGameFactoryImpl,
+		AnchorStateRegistryImpl:          dio.AnchorStateRegistryImpl,
+		FaultDisputeGameV2Impl:           dio.FaultDisputeGameV2Impl,
+		PermissionedDisputeGameV2Impl:    dio.PermissionedDisputeGameV2Impl,
+		StorageSetterImpl:                dio.StorageSetterImpl,
 	}
 
 	return nil

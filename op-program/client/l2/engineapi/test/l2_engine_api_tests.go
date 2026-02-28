@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -38,7 +39,7 @@ func RunEngineAPITests(t *testing.T, createBackend func(t *testing.T) engineapi.
 		api := newTestHelper(t, createBackend)
 		genesis := api.backend.CurrentHeader()
 
-		txData, err := derive.L1InfoDeposit(rollupCfg, eth.SystemConfig{}, 1, eth.HeaderBlockInfo(genesis), 0)
+		txData, err := derive.L1InfoDeposit(rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 1, eth.HeaderBlockInfo(genesis), 0)
 		api.assert.NoError(err)
 		tx := types.NewTx(txData)
 		block := api.addBlock(tx)
@@ -56,7 +57,7 @@ func RunEngineAPITests(t *testing.T, createBackend func(t *testing.T) engineapi.
 		api := newTestHelper(t, createBackend)
 		genesis := api.backend.CurrentHeader()
 
-		txData, err := derive.L1InfoDeposit(rollupCfg, eth.SystemConfig{}, 1, eth.HeaderBlockInfo(genesis), 0)
+		txData, err := derive.L1InfoDeposit(rollupCfg, params.MergedTestChainConfig, eth.SystemConfig{}, 1, eth.HeaderBlockInfo(genesis), 0)
 		api.assert.NoError(err)
 		txData.Gas = uint64(gasLimit + 1)
 		tx := types.NewTx(txData)
@@ -442,7 +443,9 @@ func (h *testHelper) getPayload(id *eth.PayloadID) *eth.ExecutionPayloadEnvelope
 
 func (h *testHelper) callNewPayload(envelope *eth.ExecutionPayloadEnvelope) (*eth.PayloadStatusV1, error) {
 	n := new(big.Int).SetUint64(uint64(envelope.ExecutionPayload.BlockNumber))
-	if h.backend.Config().IsCancun(n, uint64(envelope.ExecutionPayload.Timestamp)) {
+	if h.backend.Config().IsIsthmus(uint64(envelope.ExecutionPayload.Timestamp)) {
+		return h.engine.NewPayloadV4(h.ctx, envelope.ExecutionPayload, []common.Hash{}, envelope.ParentBeaconBlockRoot, []hexutil.Bytes{})
+	} else if h.backend.Config().IsCancun(n, uint64(envelope.ExecutionPayload.Timestamp)) {
 		return h.engine.NewPayloadV3(h.ctx, envelope.ExecutionPayload, []common.Hash{}, envelope.ParentBeaconBlockRoot)
 	} else {
 		return h.engine.NewPayloadV2(h.ctx, envelope.ExecutionPayload)

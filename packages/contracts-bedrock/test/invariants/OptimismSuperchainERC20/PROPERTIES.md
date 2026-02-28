@@ -16,7 +16,7 @@ Considering only the supertoken contract is merged into the `develop` branch, an
 
 ## Definitions
 
-- _legacy token:_ an OptimismMintableERC20 or L2StandardERC20 token on the suprechain that has either been deployed by the factory after the liquidity migration upgrade to the latter, or has been deployed before it **but** added to factory’s `deployments` mapping as part of the upgrade. This testing campaign is not concerned with tokens on L1 or not listed in the factory’s `deployments` mapping.
+- _legacy token:_ an OptimismMintableERC20 or L2StandardERC20 token on the superchain that has either been deployed by the factory after the liquidity migration upgrade to the latter, or has been deployed before it **but** added to factory’s `deployments` mapping as part of the upgrade. This testing campaign is not concerned with tokens on L1 or not listed in the factory’s `deployments` mapping.
 - _supertoken:_ a SuperchainERC20 contract deployed by the `OptimismSuperchainERC20Factory`
 
 # Ecosystem properties
@@ -35,10 +35,10 @@ legend:
 | --- | ------------------- | ------------------------------------------------------------------------------------------ | ------ |
 | 0   | Factories           | supertoken token address does not depend on the executing chain’s chainID                  | [ ]    |
 | 1   | Factories           | supertoken token address depends on remote token, name, symbol and decimals                | [ ]    |
-| 2   | Liquidity Migration | convert() should only allow converting legacy tokens to supertoken and viceversa           | [ ]    |
+| 2   | Liquidity Migration | convert() should only allow converting legacy tokens to supertoken and vice-versa           | [ ]    |
 | 3   | Liquidity Migration | convert() only allows migrations between tokens representing the same remote asset         | [ ]    |
 | 4   | Liquidity Migration | convert() only allows migrations from tokens with the same decimals                        | [ ]    |
-| 5   | Liquidity Migration | convert() burns the same amount of legacy token that it mints of supertoken, and viceversa | [ ]    |
+| 5   | Liquidity Migration | convert() burns the same amount of legacy token that it mints of supertoken, and vice-versa | [ ]    |
 | 25  | SupERC20            | supertokens can't be reinitialized                                                         | [x]    |
 
 ## Valid state

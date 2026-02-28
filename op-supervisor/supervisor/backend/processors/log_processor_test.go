@@ -5,15 +5,17 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum-optimism/optimism/op-service/predeploys"
-	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ethereum/go-ethereum/common"
 	ethTypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/stretchr/testify/require"
+
+	"github.com/ethereum-optimism/optimism/op-core/predeploys"
+	"github.com/ethereum-optimism/optimism/op-service/eth"
+	"github.com/ethereum-optimism/optimism/op-supervisor/supervisor/types"
 )
 
-var logProcessorChainID = types.ChainIDFromUInt64(4)
+var logProcessorChainID = eth.ChainIDFromUInt64(4)
 
 func TestLogProcessor(t *testing.T) {
 	ctx := context.Background()
@@ -23,6 +25,7 @@ func TestLogProcessor(t *testing.T) {
 		Hash:       common.Hash{0x11},
 		Time:       1111,
 	}
+
 	t.Run("NoOutputWhenLogsAreEmpty", func(t *testing.T) {
 		store := &stubLogStorage{}
 		processor := NewLogProcessor(logProcessorChainID, store)
@@ -67,19 +70,19 @@ func TestLogProcessor(t *testing.T) {
 			{
 				parent:  block1.ParentID(),
 				logIdx:  0,
-				logHash: logToLogHash(rcpts[0].Logs[0]),
+				logHash: LogToLogHash(rcpts[0].Logs[0]),
 				execMsg: nil,
 			},
 			{
 				parent:  block1.ParentID(),
 				logIdx:  0,
-				logHash: logToLogHash(rcpts[0].Logs[1]),
+				logHash: LogToLogHash(rcpts[0].Logs[1]),
 				execMsg: nil,
 			},
 			{
 				parent:  block1.ParentID(),
 				logIdx:  0,
-				logHash: logToLogHash(rcpts[1].Logs[0]),
+				logHash: LogToLogHash(rcpts[1].Logs[0]),
 				execMsg: nil,
 			},
 		}
@@ -108,14 +111,14 @@ func TestLogProcessor(t *testing.T) {
 			},
 		}
 		execMsg := &types.ExecutingMessage{
-			Chain:     4, // TODO(#11105): translate chain ID to chain index
+			ChainID:   eth.ChainIDFromUInt64(4),
 			BlockNum:  6,
 			LogIdx:    8,
 			Timestamp: 10,
-			Hash:      common.Hash{0xaa},
+			Checksum:  types.MessageChecksum{0xaa},
 		}
 		store := &stubLogStorage{}
-		processor := NewLogProcessor(types.ChainID{4}, store).(*logProcessor)
+		processor := NewLogProcessor(eth.ChainID{4}, store).(*logProcessor)
 		processor.eventDecoder = func(l *ethTypes.Log) (*types.ExecutingMessage, error) {
 			require.Equal(t, rcpts[0].Logs[0], l)
 			return execMsg, nil
@@ -127,7 +130,7 @@ func TestLogProcessor(t *testing.T) {
 			{
 				parent:  block1.ParentID(),
 				logIdx:  0,
-				logHash: logToLogHash(rcpts[0].Logs[0]),
+				logHash: LogToLogHash(rcpts[0].Logs[0]),
 				execMsg: execMsg,
 			},
 		}
@@ -178,7 +181,7 @@ func TestToLogHash(t *testing.T) {
 		func(l *ethTypes.Log) { l.Index = 98 },
 		func(l *ethTypes.Log) { l.Removed = true },
 	}
-	refHash := logToLogHash(mkLog())
+	refHash := LogToLogHash(mkLog())
 	// The log hash is stored in the database so test that it matches the actual value.
 	// If this changes, compatibility with existing databases may be affected
 	expectedRefHash := common.HexToHash("0x4e1dc08fddeb273275f787762cdfe945cf47bb4e80a1fabbc7a825801e81b73f")
@@ -188,14 +191,14 @@ func TestToLogHash(t *testing.T) {
 	for i, mod := range relevantMods {
 		l := mkLog()
 		mod(l)
-		hash := logToLogHash(l)
+		hash := LogToLogHash(l)
 		require.NotEqualf(t, refHash, hash, "expected relevant modification %v to affect the hash but it did not", i)
 	}
 	// Check that the hash is not changed when any data it should not include changes
 	for i, mod := range irrelevantMods {
 		l := mkLog()
 		mod(l)
-		hash := logToLogHash(l)
+		hash := LogToLogHash(l)
 		require.Equal(t, refHash, hash, "expected irrelevant modification %v to not affect the hash but it did", i)
 	}
 }
@@ -205,7 +208,7 @@ type stubLogStorage struct {
 	seals []storedSeal
 }
 
-func (s *stubLogStorage) SealBlock(chainID types.ChainID, block eth.BlockRef) error {
+func (s *stubLogStorage) SealBlock(chainID eth.ChainID, block eth.BlockRef) error {
 	if logProcessorChainID != chainID {
 		return fmt.Errorf("chain id mismatch, expected %v but got %v", logProcessorChainID, chainID)
 	}
@@ -217,7 +220,7 @@ func (s *stubLogStorage) SealBlock(chainID types.ChainID, block eth.BlockRef) er
 	return nil
 }
 
-func (s *stubLogStorage) AddLog(chainID types.ChainID, logHash common.Hash, parentBlock eth.BlockID, logIdx uint32, execMsg *types.ExecutingMessage) error {
+func (s *stubLogStorage) AddLog(chainID eth.ChainID, logHash common.Hash, parentBlock eth.BlockID, logIdx uint32, execMsg *types.ExecutingMessage) error {
 	if logProcessorChainID != chainID {
 		return fmt.Errorf("chain id mismatch, expected %v but got %v", logProcessorChainID, chainID)
 	}

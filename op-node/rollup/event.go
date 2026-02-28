@@ -1,6 +1,8 @@
 package rollup
 
-import "github.com/ethereum-optimism/optimism/op-node/rollup/event"
+import (
+	"github.com/ethereum-optimism/optimism/op-service/event"
+)
 
 // L1TemporaryErrorEvent identifies a temporary issue with the L1 data.
 type L1TemporaryErrorEvent struct {

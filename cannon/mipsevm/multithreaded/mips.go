@@ -12,6 +12,7 @@ import (
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/arch"
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/exec"
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/program"
+	"github.com/ethereum-optimism/optimism/cannon/mipsevm/register"
 )
 
 type Word = arch.Word
@@ -19,7 +20,7 @@ type Word = arch.Word
 func (m *InstrumentedState) handleSyscall() error {
 	thread := m.state.GetCurrentThread()
 
-	syscallNum, a0, a1, a2, a3 := exec.GetSyscallArgs(m.state.GetRegistersRef())
+	syscallNum, a0, a1, a2 := exec.GetSyscallArgs(m.state.GetRegistersRef())
 	v0 := Word(0)
 	v1 := Word(0)
 
@@ -42,12 +43,9 @@ func (m *InstrumentedState) handleSyscall() error {
 		v0 = m.state.NextThreadId
 		v1 = 0
 		newThread := &ThreadState{
-			ThreadId:         m.state.NextThreadId,
-			ExitCode:         0,
-			Exited:           false,
-			FutexAddr:        exec.FutexEmptyAddr,
-			FutexVal:         0,
-			FutexTimeoutStep: 0,
+			ThreadId: m.state.NextThreadId,
+			ExitCode: 0,
+			Exited:   false,
 			Cpu: mipsevm.CpuScalars{
 				PC:     thread.Cpu.NextPC,
 				NextPC: thread.Cpu.NextPC + 4,
@@ -57,10 +55,10 @@ func (m *InstrumentedState) handleSyscall() error {
 			Registers: thread.Registers,
 		}
 
-		newThread.Registers[29] = a1
+		newThread.Registers[register.RegSP] = a1
 		// the child will perceive a 0 value as returned value instead, and no error
-		newThread.Registers[exec.RegSyscallRet1] = 0
-		newThread.Registers[exec.RegSyscallErrno] = 0
+		newThread.Registers[register.RegSyscallRet1] = 0
+		newThread.Registers[register.RegSyscallErrno] = 0
 		m.state.NextThreadId++
 
 		// Preempt this thread for the new one. But not before updating PCs
@@ -108,50 +106,32 @@ func (m *InstrumentedState) handleSyscall() error {
 		return nil
 	case arch.SysFutex:
 		// args: a0 = addr, a1 = op, a2 = val, a3 = timeout
-		effAddr := a0 & arch.AddressMask
+		// Futex value is 32-bit, so clear the lower 2 bits to get an effective address targeting a 4-byte value
+		effFutexAddr := a0 & ^Word(0x3)
 		switch a1 {
 		case exec.FutexWaitPrivate:
-			m.memoryTracker.TrackMemAccess(effAddr)
-			mem := m.state.Memory.GetWord(effAddr)
-			if mem != a2 {
-				v0 = exec.SysErrorSignal
-				v1 = exec.MipsEAGAIN
+			futexVal := m.getFutexValue(effFutexAddr)
+			targetVal := uint32(a2)
+			if futexVal != targetVal {
+				v0 = exec.MipsEAGAIN
+				v1 = exec.SysErrorSignal
 			} else {
-				thread.FutexAddr = effAddr
-				thread.FutexVal = a2
-				if a3 == 0 {
-					thread.FutexTimeoutStep = exec.FutexNoTimeout
-				} else {
-					thread.FutexTimeoutStep = m.state.Step + exec.FutexTimeoutSteps
-				}
-				// Leave cpu scalars as-is. This instruction will be completed by `onWaitComplete`
+				m.syscallYield(thread)
 				return nil
 			}
 		case exec.FutexWakePrivate:
-			// Trigger thread traversal starting from the left stack until we find one waiting on the wakeup
-			// address
-			m.state.Wakeup = effAddr
-			// Don't indicate to the program that we've woken up a waiting thread, as there are no guarantees.
-			// The woken up thread should indicate this in userspace.
-			v0 = 0
-			v1 = 0
-			exec.HandleSyscallUpdates(&thread.Cpu, &thread.Registers, v0, v1)
-			m.preemptThread(thread)
-			m.state.TraverseRight = len(m.state.LeftThreadStack) == 0
+			m.syscallYield(thread)
 			return nil
 		default:
-			v0 = exec.SysErrorSignal
-			v1 = exec.MipsEINVAL
+			v0 = exec.MipsEINVAL
+			v1 = exec.SysErrorSignal
 		}
 	case arch.SysSchedYield, arch.SysNanosleep:
-		v0 = 0
-		v1 = 0
-		exec.HandleSyscallUpdates(&thread.Cpu, &thread.Registers, v0, v1)
-		m.preemptThread(thread)
+		m.syscallYield(thread)
 		return nil
 	case arch.SysOpen:
-		v0 = exec.SysErrorSignal
-		v1 = exec.MipsEBADF
+		v0 = exec.MipsEBADF
+		v1 = exec.SysErrorSignal
 	case arch.SysClockGetTime:
 		switch a0 {
 		case exec.ClockGettimeRealtimeFlag, exec.ClockGettimeMonotonicFlag:
@@ -172,13 +152,19 @@ func (m *InstrumentedState) handleSyscall() error {
 			m.state.Memory.SetWord(effAddr+arch.WordSizeBytes, nsecs)
 			m.handleMemoryUpdate(effAddr + arch.WordSizeBytes)
 		default:
-			v0 = exec.SysErrorSignal
-			v1 = exec.MipsEINVAL
+			v0 = exec.MipsEINVAL
+			v1 = exec.SysErrorSignal
 		}
 	case arch.SysGetpid:
 		v0 = 0
 		v1 = 0
+	case arch.SysGetRandom:
+		if m.features.SupportWorkingSysGetRandom {
+			v0, v1 = m.syscallGetRandom(a0, a1)
+		}
+		// Otherwise, ignored (noop)
 	case arch.SysMunmap:
+	case arch.SysMprotect:
 	case arch.SysGetAffinity:
 	case arch.SysMadvise:
 	case arch.SysRtSigprocmask:
@@ -197,7 +183,6 @@ func (m *InstrumentedState) handleSyscall() error {
 	case arch.SysPipe2:
 	case arch.SysEpollCtl:
 	case arch.SysEpollPwait:
-	case arch.SysGetRandom:
 	case arch.SysUname:
 	case arch.SysGetuid:
 	case arch.SysGetgid:
@@ -209,18 +194,81 @@ func (m *InstrumentedState) handleSyscall() error {
 	case arch.SysTimerDelete:
 	case arch.SysGetRLimit:
 	case arch.SysLseek:
+	case arch.SysEventFd2:
+		// a0 = initial value, a1 = flags
+		// Validate flags
+		if a1&exec.EFD_NONBLOCK == 0 {
+			// The non-block flag was not set, but we only support non-block requests, so error
+			v0 = exec.MipsEINVAL
+			v1 = exec.SysErrorSignal
+		} else {
+			v0 = exec.FdEventFd
+		}
 	default:
 		// These syscalls have the same values on 64-bit. So we use if-stmts here to avoid "duplicate case" compiler error for the cannon64 build
-		if arch.IsMips32 && syscallNum == arch.SysFstat64 || syscallNum == arch.SysStat64 || syscallNum == arch.SysLlseek {
+		if arch.IsMips32 && (syscallNum == arch.SysFstat64 || syscallNum == arch.SysStat64 || syscallNum == arch.SysLlseek) {
 			// noop
 		} else {
-			m.Traceback()
-			panic(fmt.Sprintf("unrecognized syscall: %d", syscallNum))
+			m.handleUnrecognizedSyscall(syscallNum)
 		}
 	}
 
 	exec.HandleSyscallUpdates(&thread.Cpu, &thread.Registers, v0, v1)
 	return nil
+}
+
+func (m *InstrumentedState) syscallGetRandom(a0, a1 uint64) (v0, v1 uint64) {
+	// Get existing memory value at target address
+	effAddr := a0 & arch.AddressMask
+	m.memoryTracker.TrackMemAccess(effAddr)
+	memVal := m.state.Memory.GetWord(effAddr)
+
+	// Generate some pseudorandom data
+	randomWord := splitmix64(m.state.Step)
+
+	// Calculate number of bytes to write
+	targetByteIndex := a0 - effAddr
+	maxBytes := arch.WordSizeBytes - targetByteIndex
+	byteCount := a1
+	if maxBytes < byteCount {
+		byteCount = maxBytes
+	}
+
+	// Write random data into target memory location
+	var randDataMask arch.Word = (1 << (byteCount * 8)) - 1
+	// Shift left to align with index 0, then shift right to target correct index
+	randDataMask <<= (arch.WordSizeBytes - byteCount) * 8
+	randDataMask >>= targetByteIndex * 8
+	newMemVal := (memVal & ^randDataMask) | (randomWord & randDataMask)
+
+	m.state.Memory.SetWord(effAddr, newMemVal)
+	m.handleMemoryUpdate(effAddr)
+
+	v0 = byteCount
+	v1 = 0
+
+	return v0, v1
+}
+
+// splitmix64 generates a pseudorandom 64-bit value.
+// See canonical implementation: https://prng.di.unimi.it/splitmix64.c
+func splitmix64(seed uint64) uint64 {
+	z := seed + 0x9e3779b97f4a7c15
+	z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+	z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+	return z ^ (z >> 31)
+}
+
+func (m *InstrumentedState) handleUnrecognizedSyscall(syscallNum Word) {
+	m.Traceback()
+	panic(fmt.Sprintf("unrecognized syscall: %d", syscallNum))
+}
+
+func (m *InstrumentedState) syscallYield(thread *ThreadState) {
+	v0 := Word(0)
+	v1 := Word(0)
+	exec.HandleSyscallUpdates(&thread.Cpu, &thread.Registers, v0, v1)
+	m.preemptThread(thread)
 }
 
 func (m *InstrumentedState) mipsStep() error {
@@ -247,55 +295,10 @@ func (m *InstrumentedState) doMipsStep() error {
 	m.state.Step += 1
 	thread := m.state.GetCurrentThread()
 
-	// During wakeup traversal, search for the first thread blocked on the wakeup address.
-	// Don't allow regular execution until we have found such a thread or else we have visited all threads.
-	if m.state.Wakeup != exec.FutexEmptyAddr {
-		// We are currently performing a wakeup traversal
-		if m.state.Wakeup == thread.FutexAddr {
-			// We found a target thread, resume normal execution and process this thread
-			m.state.Wakeup = exec.FutexEmptyAddr
-		} else {
-			// This is not the thread we're looking for, move on
-			traversingRight := m.state.TraverseRight
-			changedDirections := m.preemptThread(thread)
-			if traversingRight && changedDirections {
-				// We started the wakeup traversal walking left and we've now walked all the way right
-				// We have therefore visited all threads and can resume normal thread execution
-				m.state.Wakeup = exec.FutexEmptyAddr
-			}
-		}
-		return nil
-	}
-
 	if thread.Exited {
 		m.popThread()
 		m.stackTracker.DropThread(thread.ThreadId)
 		return nil
-	}
-
-	// check if thread is blocked on a futex
-	if thread.FutexAddr != exec.FutexEmptyAddr {
-		// if set, then check futex
-		// check timeout first
-		if m.state.Step > thread.FutexTimeoutStep {
-			// timeout! Allow execution
-			m.onWaitComplete(thread, true)
-			return nil
-		} else {
-			effAddr := thread.FutexAddr & arch.AddressMask
-			m.memoryTracker.TrackMemAccess(effAddr)
-			mem := m.state.Memory.GetWord(effAddr)
-			if thread.FutexVal == mem {
-				// still got expected value, continue sleeping, try next thread.
-				m.preemptThread(thread)
-				return nil
-			} else {
-				// wake thread up, the value at its address changed!
-				// Userspace can turn thread back to sleep if it was too sporadic.
-				m.onWaitComplete(thread, false)
-				return nil
-			}
-		}
 	}
 
 	if m.state.StepsSinceLastContextSwitch >= exec.SchedQuantum {
@@ -308,12 +311,26 @@ func (m *InstrumentedState) doMipsStep() error {
 			}
 		}
 		m.preemptThread(thread)
+		m.statsTracker.trackForcedPreemption()
 		return nil
 	}
 	m.state.StepsSinceLastContextSwitch += 1
 
-	//instruction fetch
-	insn, opcode, fun := exec.GetInstructionDetails(m.state.GetPC(), m.state.Memory)
+	pc := m.state.GetPC()
+	if pc&0x3 != 0 {
+		panic(fmt.Sprintf("unaligned instruction fetch: PC = 0x%x", pc))
+	}
+	cacheIdx := pc / 4
+
+	var insn, opcode, fun uint32
+	if int(cacheIdx) < len(m.cached_decode) {
+		decoded := m.cached_decode[cacheIdx]
+		insn, opcode, fun = decoded.insn, decoded.opcode, decoded.fun
+	} else {
+		// PC is outside eager region
+		m.statsTracker.trackInstructionCacheMiss(pc)
+		insn, opcode, fun = exec.GetInstructionDetails(pc, m.state.Memory)
+	}
 
 	// Handle syscall separately
 	// syscall (can read and write)
@@ -348,6 +365,7 @@ func (m *InstrumentedState) handleMemoryUpdate(effMemAddr Word) {
 	if effMemAddr == (arch.AddressMask & m.state.LLAddress) {
 		// Reserved address was modified, clear the reservation
 		m.clearLLMemoryReservation()
+		m.statsTracker.trackReservationInvalidation()
 	}
 }
 
@@ -383,6 +401,8 @@ func (m *InstrumentedState) handleRMWOps(insn, opcode uint32) error {
 		m.state.LLReservationStatus = targetStatus
 		m.state.LLAddress = addr
 		m.state.LLOwnerThread = threadId
+
+		m.statsTracker.trackLL(threadId, m.GetState().GetStep())
 	case exec.OpStoreConditional, exec.OpStoreConditional64:
 		if m.state.LLReservationStatus == targetStatus && m.state.LLOwnerThread == threadId && m.state.LLAddress == addr {
 			// Complete atomic update: set memory and return 1 for success
@@ -392,32 +412,19 @@ func (m *InstrumentedState) handleRMWOps(insn, opcode uint32) error {
 			exec.StoreSubWord(m.state.GetMemory(), addr, byteLength, val, m.memoryTracker)
 
 			retVal = 1
+
+			m.statsTracker.trackSCSuccess(threadId, m.GetState().GetStep())
 		} else {
 			// Atomic update failed, return 0 for failure
 			retVal = 0
+
+			m.statsTracker.trackSCFailure(threadId, m.GetState().GetStep())
 		}
 	default:
 		panic(fmt.Sprintf("Invalid instruction passed to handleRMWOps (opcode %08x)", opcode))
 	}
 
 	return exec.HandleRd(m.state.getCpuRef(), m.state.GetRegistersRef(), rtReg, retVal, true)
-}
-
-func (m *InstrumentedState) onWaitComplete(thread *ThreadState, isTimedOut bool) {
-	// Note: no need to reset m.state.Wakeup.  If we're here, the Wakeup field has already been reset
-	// Clear the futex state
-	thread.FutexAddr = exec.FutexEmptyAddr
-	thread.FutexVal = 0
-	thread.FutexTimeoutStep = 0
-
-	// Complete the FUTEX_WAIT syscall
-	v0 := Word(0)
-	v1 := Word(0)
-	if isTimedOut {
-		v0 = exec.SysErrorSignal
-		v1 = exec.MipsETIMEDOUT
-	}
-	exec.HandleSyscallUpdates(&thread.Cpu, &thread.Registers, v0, v1)
 }
 
 func (m *InstrumentedState) preemptThread(thread *ThreadState) bool {
@@ -446,6 +453,8 @@ func (m *InstrumentedState) preemptThread(thread *ThreadState) bool {
 	}
 
 	m.state.StepsSinceLastContextSwitch = 0
+
+	m.statsTracker.trackThreadActivated(m.state.GetCurrentThread().ThreadId, m.state.GetStep())
 	return changeDirections
 }
 
@@ -474,4 +483,9 @@ func (m *InstrumentedState) popThread() {
 
 func (m *InstrumentedState) lastThreadRemaining() bool {
 	return m.state.ThreadCount() == 1
+}
+
+func (m *InstrumentedState) getFutexValue(vAddr Word) uint32 {
+	subword := exec.LoadSubWord(m.state.GetMemory(), vAddr, Word(4), false, m.memoryTracker)
+	return uint32(subword)
 }

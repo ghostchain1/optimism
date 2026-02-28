@@ -10,7 +10,8 @@ import (
 	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-node/rollup/derive"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
-	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum-optimism/optimism/op-service/queue"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 var (
@@ -47,6 +48,7 @@ type frameData struct {
 // ChannelBuilder uses a ChannelOut to create a channel with output frame
 // size approximation.
 type ChannelBuilder struct {
+	log       log.Logger
 	cfg       ChannelConfig
 	rollupCfg *rollup.Config
 
@@ -65,7 +67,7 @@ type ChannelBuilder struct {
 	// current channel
 	co derive.ChannelOut
 	// list of blocks in the channel. Saved in case the channel must be rebuilt
-	blocks []*types.Block
+	blocks queue.Queue[SizedBlock]
 	// latestL1Origin is the latest L1 origin of all the L2 blocks that have been added to the channel
 	latestL1Origin eth.BlockID
 	// oldestL1Origin is the oldest L1 origin of all the L2 blocks that have been added to the channel
@@ -75,27 +77,21 @@ type ChannelBuilder struct {
 	// oldestL2 is the oldest L2 block of all the L2 blocks that have been added to the channel
 	oldestL2 eth.BlockID
 	// frames data queue, to be send as txs
-	frames []frameData
+	frames queue.Queue[frameData]
+	// frameCursor tracks which frames in the queue were submitted
+	// frames[frameCursor] is the next unsubmitted (pending) frame
+	// frameCursor = len(frames) is reserved for when
+	// there are no pending (next unsubmitted) frames
+	frameCursor int
 	// total frames counter
 	numFrames int
 	// total amount of output data of all frames created yet
 	outputBytes int
 }
 
-// NewChannelBuilder creates a new channel builder or returns an error if the
-// channel out could not be created.
-// it acts as a factory for either a span or singular channel out
-func NewChannelBuilder(cfg ChannelConfig, rollupCfg *rollup.Config, latestL1OriginBlockNum uint64) (*ChannelBuilder, error) {
-	co, err := NewChannelOut(cfg, rollupCfg)
-	if err != nil {
-		return nil, fmt.Errorf("creating channel out: %w", err)
-	}
-
-	return NewChannelBuilderWithChannelOut(cfg, rollupCfg, latestL1OriginBlockNum, co), nil
-}
-
-func NewChannelBuilderWithChannelOut(cfg ChannelConfig, rollupCfg *rollup.Config, latestL1OriginBlockNum uint64, channelOut derive.ChannelOut) *ChannelBuilder {
+func NewChannelBuilderWithChannelOut(log log.Logger, cfg ChannelConfig, rollupCfg *rollup.Config, latestL1OriginBlockNum uint64, channelOut derive.ChannelOut) *ChannelBuilder {
 	cb := &ChannelBuilder{
+		log:       log.With("channel_id", channelOut.ID()),
 		cfg:       cfg,
 		rollupCfg: rollupCfg,
 		co:        channelOut,
@@ -140,12 +136,6 @@ func (c *ChannelBuilder) OutputBytes() int {
 	return c.outputBytes
 }
 
-// Blocks returns a backup list of all blocks that were added to the channel. It
-// can be used in case the channel needs to be rebuilt.
-func (c *ChannelBuilder) Blocks() []*types.Block {
-	return c.blocks
-}
-
 // LatestL1Origin returns the latest L1 block origin from all the L2 blocks that have been added to the channel
 func (c *ChannelBuilder) LatestL1Origin() eth.BlockID {
 	return c.latestL1Origin
@@ -177,12 +167,12 @@ func (c *ChannelBuilder) OldestL2() eth.BlockID {
 // first transaction for subsequent use by the caller.
 //
 // Call OutputFrames() afterwards to create frames.
-func (c *ChannelBuilder) AddBlock(block *types.Block) (*derive.L1BlockInfo, error) {
+func (c *ChannelBuilder) AddBlock(block SizedBlock) (*derive.L1BlockInfo, error) {
 	if c.IsFull() {
 		return nil, c.FullErr()
 	}
 
-	l1info, err := c.co.AddBlock(c.rollupCfg, block)
+	l1info, err := c.co.AddBlock(c.rollupCfg, block.Block)
 	if errors.Is(err, derive.ErrTooManyRLPBytes) || errors.Is(err, derive.ErrCompressorFull) {
 		c.setFullErr(err)
 		return l1info, c.FullErr()
@@ -190,7 +180,7 @@ func (c *ChannelBuilder) AddBlock(block *types.Block) (*derive.L1BlockInfo, erro
 		return l1info, fmt.Errorf("adding block to channel out: %w", err)
 	}
 
-	c.blocks = append(c.blocks, block)
+	c.blocks.Enqueue(block)
 	c.updateSwTimeout(l1info.Number)
 
 	if l1info.Number > c.latestL1Origin.Number {
@@ -220,13 +210,6 @@ func (c *ChannelBuilder) AddBlock(block *types.Block) (*derive.L1BlockInfo, erro
 	return l1info, nil
 }
 
-// Timeout management
-
-// Timeout returns the block number of the channel timeout. If no timeout is set it returns 0
-func (c *ChannelBuilder) Timeout() uint64 {
-	return c.timeout
-}
-
 // FramePublished should be called whenever a frame of this channel got
 // published with the L1-block number of the block that the frame got included
 // in.
@@ -244,8 +227,7 @@ func (c *ChannelBuilder) updateDurationTimeout(l1BlockNum uint64) {
 	if c.cfg.MaxChannelDuration == 0 {
 		return
 	}
-	timeout := l1BlockNum + c.cfg.MaxChannelDuration
-	c.updateTimeout(timeout, ErrMaxDurationReached)
+	c.updateTimeout(l1BlockNum+c.cfg.MaxChannelDuration, ErrMaxDurationReached)
 }
 
 // updateSwTimeout updates the block timeout with the sequencer window timeout
@@ -264,6 +246,7 @@ func (c *ChannelBuilder) updateSwTimeout(l1InfoNumber uint64) {
 // full error reason in case the timeout is hit in the future.
 func (c *ChannelBuilder) updateTimeout(timeoutBlockNum uint64, reason error) {
 	if c.timeout == 0 || c.timeout > timeoutBlockNum {
+		c.log.Debug("setting timeout", "number", timeoutBlockNum, "timeout", c.timeout)
 		c.timeout = timeoutBlockNum
 		c.timeoutReason = reason
 	}
@@ -272,15 +255,10 @@ func (c *ChannelBuilder) updateTimeout(timeoutBlockNum uint64, reason error) {
 // CheckTimeout checks if the channel is timed out at the given block number and
 // in this case marks the channel as full, if it wasn't full already.
 func (c *ChannelBuilder) CheckTimeout(l1BlockNum uint64) {
-	if !c.IsFull() && c.TimedOut(l1BlockNum) {
+	if c.timeout != 0 && !c.IsFull() && l1BlockNum >= c.timeout {
+		c.log.Debug("checking timeout", "l1blockNum", l1BlockNum, "timeout", c.timeout)
 		c.setFullErr(c.timeoutReason)
 	}
-}
-
-// TimedOut returns whether the passed block number is after the timeout block
-// number. If no block timeout is set yet, it returns false.
-func (c *ChannelBuilder) TimedOut(blockNum uint64) bool {
-	return c.timeout != 0 && blockNum >= c.timeout
 }
 
 // IsFull returns whether the channel is full.
@@ -312,11 +290,11 @@ func (c *ChannelBuilder) setFullErr(err error) {
 }
 
 // OutputFrames creates new frames with the channel out. It should be called
-// after AddBlock and before iterating over available frames with HasFrame and
+// after AddBlock and before iterating over pending frames with HasFrame and
 // NextFrame.
 //
 // If the channel isn't full yet, it will conservatively only
-// pull readily available frames from the compression output.
+// pull pending frames from the compression output.
 // If it is full, the channel is closed and all remaining
 // frames will be created, possibly with a small leftover frame.
 func (c *ChannelBuilder) OutputFrames() error {
@@ -387,7 +365,7 @@ func (c *ChannelBuilder) outputFrame() error {
 		id:   frameID{chID: c.co.ID(), frameNumber: fn},
 		data: buf.Bytes(),
 	}
-	c.frames = append(c.frames, frame)
+	c.frames.Enqueue(frame)
 	c.numFrames++
 	c.outputBytes += len(frame.data)
 	return err // possibly io.EOF (last frame)
@@ -402,46 +380,47 @@ func (c *ChannelBuilder) Close() {
 }
 
 // TotalFrames returns the total number of frames that were created in this channel so far.
-// It does not decrease when the frames queue is being emptied.
 func (c *ChannelBuilder) TotalFrames() int {
 	return c.numFrames
 }
 
-// HasFrame returns whether there's any available frame. If true, it can be
-// popped using NextFrame().
+// HasPendingFrame returns whether there's any pending frame. If true, it can be
+// dequeued using NextFrame().
 //
 // Call OutputFrames before to create new frames from the channel out
 // compression pipeline.
-func (c *ChannelBuilder) HasFrame() bool {
-	return len(c.frames) > 0
+func (c *ChannelBuilder) HasPendingFrame() bool {
+	return c.frameCursor < c.frames.Len()
 }
 
 // PendingFrames returns the number of pending frames in the frames queue.
-// It is larger zero iff HasFrame() returns true.
+// It is larger than zero iff HasFrame() returns true.
 func (c *ChannelBuilder) PendingFrames() int {
-	return len(c.frames)
+	return c.frames.Len() - c.frameCursor
 }
 
-// NextFrame dequeues the next available frame.
-// HasFrame must be called prior to check if there's a next frame available.
+// NextFrame returns the next pending frame and increments the frameCursor
+// HasFrame must be called prior to check if there a next pending frame exists.
 // Panics if called when there's no next frame.
 func (c *ChannelBuilder) NextFrame() frameData {
-	if len(c.frames) == 0 {
+	if len(c.frames) <= c.frameCursor {
 		panic("no next frame")
 	}
-
-	f := c.frames[0]
-	c.frames = c.frames[1:]
+	f := c.frames[c.frameCursor]
+	c.frameCursor++
 	return f
 }
 
-// PushFrames adds the frames back to the internal frames queue. Panics if not of
-// the same channel.
-func (c *ChannelBuilder) PushFrames(frames ...frameData) {
-	for _, f := range frames {
-		if f.id.chID != c.ID() {
-			panic("wrong channel")
-		}
-		c.frames = append(c.frames, f)
+// RewindFrameCursor moves the frameCursor to point at the supplied frame
+// only if it is ahead of it.
+// Panics if the frame is not in this channel.
+func (c *ChannelBuilder) RewindFrameCursor(frame frameData) {
+	if c.frames.Len() <= int(frame.id.frameNumber) ||
+		len(c.frames[frame.id.frameNumber].data) != len(frame.data) ||
+		c.frames[frame.id.frameNumber].id.chID != frame.id.chID {
+		panic("cannot rewind to unknown frame")
+	}
+	if c.frameCursor > int(frame.id.frameNumber) {
+		c.frameCursor = int(frame.id.frameNumber)
 	}
 }

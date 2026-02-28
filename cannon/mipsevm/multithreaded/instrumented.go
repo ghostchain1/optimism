@@ -11,6 +11,9 @@ import (
 	"github.com/ethereum-optimism/optimism/cannon/mipsevm/exec"
 )
 
+type InstructionDetails struct {
+	insn, opcode, fun uint32
+}
 type InstrumentedState struct {
 	state *State
 
@@ -20,14 +23,27 @@ type InstrumentedState struct {
 
 	memoryTracker *exec.MemoryTrackerImpl
 	stackTracker  ThreadedStackTracker
+	statsTracker  StatsTracker
 
 	preimageOracle *exec.TrackingPreimageOracleReader
 	meta           mipsevm.Metadata
+
+	cached_decode []InstructionDetails
+	features      mipsevm.FeatureToggles
 }
 
 var _ mipsevm.FPVM = (*InstrumentedState)(nil)
 
-func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdErr io.Writer, log log.Logger, meta mipsevm.Metadata) *InstrumentedState {
+func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdErr io.Writer, log log.Logger, meta mipsevm.Metadata, features mipsevm.FeatureToggles) *InstrumentedState {
+	memLen := len(state.Memory.MappedRegions[0].Data)
+	cached_decode := make([]InstructionDetails, memLen/4)
+
+	// Perform eager decode of all mapped code
+	for pc := Word(0); pc < Word(memLen); pc += 4 {
+		insn, opcode, fun := exec.GetInstructionDetails(pc, state.Memory)
+		cached_decode[pc/4] = InstructionDetails{insn, opcode, fun}
+	}
+
 	return &InstrumentedState{
 		state:          state,
 		log:            log,
@@ -35,8 +51,11 @@ func NewInstrumentedState(state *State, po mipsevm.PreimageOracle, stdOut, stdEr
 		stdErr:         stdErr,
 		memoryTracker:  exec.NewMemoryTracker(state.Memory),
 		stackTracker:   &NoopThreadedStackTracker{},
+		statsTracker:   NoopStatsTracker(),
 		preimageOracle: exec.NewTrackingPreimageOracleReader(po),
 		meta:           meta,
+		cached_decode:  cached_decode,
+		features:       features,
 	}
 }
 
@@ -47,6 +66,10 @@ func (m *InstrumentedState) InitDebug() error {
 	}
 	m.stackTracker = stackTracker
 	return nil
+}
+
+func (m *InstrumentedState) EnableStats() {
+	m.statsTracker = NewStatsTracker()
 }
 
 func (m *InstrumentedState) Step(proof bool) (wit *mipsevm.StepWitness, err error) {
@@ -100,12 +123,15 @@ func (m *InstrumentedState) GetState() mipsevm.FPVMState {
 }
 
 func (m *InstrumentedState) GetDebugInfo() *mipsevm.DebugInfo {
-	return &mipsevm.DebugInfo{
+	debugInfo := &mipsevm.DebugInfo{
 		Pages:               m.state.Memory.PageCount(),
 		MemoryUsed:          hexutil.Uint64(m.state.Memory.UsageRaw()),
 		NumPreimageRequests: m.preimageOracle.NumPreimageRequests(),
 		TotalPreimageSize:   m.preimageOracle.TotalPreimageSize(),
+		TotalSteps:          m.state.GetStep(),
 	}
+	m.statsTracker.populateDebugInfo(debugInfo)
+	return debugInfo
 }
 
 func (m *InstrumentedState) Traceback() {
@@ -117,4 +143,12 @@ func (m *InstrumentedState) LookupSymbol(addr arch.Word) string {
 		return ""
 	}
 	return m.meta.LookupSymbol(addr)
+}
+
+func (m *InstrumentedState) UpdateInstructionCache(pc arch.Word) {
+	idx := pc / 4
+	if int(idx) < len(m.cached_decode) {
+		insn, opcode, fun := exec.GetInstructionDetails(pc, m.state.Memory)
+		m.cached_decode[idx] = InstructionDetails{insn, opcode, fun}
+	}
 }

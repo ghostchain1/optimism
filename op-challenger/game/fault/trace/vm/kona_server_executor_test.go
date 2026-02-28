@@ -13,24 +13,26 @@ import (
 func TestKonaFillHostCommand(t *testing.T) {
 	dir := "mockdir"
 	cfg := Config{
-		L1:       "http://localhost:8888",
-		L1Beacon: "http://localhost:9000",
-		L2:       "http://localhost:9999",
-		Server:   "./bin/mockserver",
-		Network:  "op-mainnet",
+		L1:            "http://localhost:8888",
+		L1Beacon:      "http://localhost:9000",
+		L2s:           []string{"http://localhost:9999"},
+		Server:        "./bin/mockserver",
+		Networks:      []string{"op-mainnet"},
+		L1GenesisPath: "mockdir/l1-genesis-1.json",
 	}
 	inputs := utils.LocalGameInputs{
-		L1Head:        common.Hash{0x11},
-		L2Head:        common.Hash{0x22},
-		L2OutputRoot:  common.Hash{0x33},
-		L2Claim:       common.Hash{0x44},
-		L2BlockNumber: big.NewInt(3333),
+		L1Head:           common.Hash{0x11},
+		L2Head:           common.Hash{0x22},
+		L2OutputRoot:     common.Hash{0x33},
+		L2Claim:          common.Hash{0x44},
+		L2SequenceNumber: big.NewInt(3333),
 	}
 	vmConfig := NewKonaExecutor()
 
 	args, err := vmConfig.OracleCommand(cfg, dir, inputs)
 	require.NoError(t, err)
 
+	require.True(t, slices.Contains(args, "single"))
 	require.True(t, slices.Contains(args, "--server"))
 	require.True(t, slices.Contains(args, "--l1-node-address"))
 	require.True(t, slices.Contains(args, "--l1-beacon-address"))
@@ -38,8 +40,9 @@ func TestKonaFillHostCommand(t *testing.T) {
 	require.True(t, slices.Contains(args, "--data-dir"))
 	require.True(t, slices.Contains(args, "--l2-chain-id"))
 	require.True(t, slices.Contains(args, "--l1-head"))
-	require.True(t, slices.Contains(args, "--l2-head"))
-	require.True(t, slices.Contains(args, "--l2-output-root"))
-	require.True(t, slices.Contains(args, "--l2-claim"))
-	require.True(t, slices.Contains(args, "--l2-block-number"))
+	require.True(t, slices.Contains(args, "--agreed-l2-head-hash"))
+	require.True(t, slices.Contains(args, "--agreed-l2-output-root"))
+	require.True(t, slices.Contains(args, "--claimed-l2-output-root"))
+	require.True(t, slices.Contains(args, "--claimed-l2-block-number"))
+	require.True(t, slices.Contains(args, "--l1-config-path"))
 }

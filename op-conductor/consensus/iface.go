@@ -39,8 +39,6 @@ type ServerInfo struct {
 }
 
 // Consensus defines the consensus interface for leadership election.
-//
-//go:generate mockery --name Consensus --output mocks/ --with-expecter=true
 type Consensus interface {
 	// Addr returns the address of this consensus server.
 	// Internally the server may override what is advertised, or fall back to the address it listens to.
@@ -72,9 +70,9 @@ type Consensus interface {
 	// ClusterMembership returns the current cluster membership configuration and associated version.
 	ClusterMembership() (*ClusterMembership, error)
 
-	// CommitPayload commits latest unsafe payload to the FSM in a strongly consistent fashion.
+	// CommitUnsafePayload commits latest unsafe payload to the FSM in a strongly consistent fashion.
 	CommitUnsafePayload(payload *eth.ExecutionPayloadEnvelope) error
-	// LatestUnsafeBlock returns the latest unsafe payload from FSM in a strongly consistent fashion.
+	// LatestUnsafePayload returns the latest unsafe payload from FSM in a strongly consistent fashion.
 	LatestUnsafePayload() (*eth.ExecutionPayloadEnvelope, error)
 
 	// Shutdown shuts down the consensus protocol client.

@@ -13,22 +13,17 @@ import (
 )
 
 type LogStorage interface {
-	SealBlock(chain types.ChainID, block eth.BlockRef) error
-	AddLog(chain types.ChainID, logHash common.Hash, parentBlock eth.BlockID, logIdx uint32, execMsg *types.ExecutingMessage) error
-}
-
-type ChainsDBClientForLogProcessor interface {
-	SealBlock(chain types.ChainID, block eth.BlockRef) error
-	AddLog(chain types.ChainID, logHash common.Hash, parentBlock eth.BlockID, logIdx uint32, execMsg *types.ExecutingMessage) error
+	SealBlock(chain eth.ChainID, block eth.BlockRef) error
+	AddLog(chain eth.ChainID, logHash common.Hash, parentBlock eth.BlockID, logIdx uint32, execMsg *types.ExecutingMessage) error
 }
 
 type logProcessor struct {
-	chain        types.ChainID
+	chain        eth.ChainID
 	logStore     LogStorage
 	eventDecoder EventDecoderFn
 }
 
-func NewLogProcessor(chain types.ChainID, logStore LogStorage) LogProcessor {
+func NewLogProcessor(chain eth.ChainID, logStore LogStorage) LogProcessor {
 	return &logProcessor{
 		chain:        chain,
 		logStore:     logStore,
@@ -42,7 +37,7 @@ func (p *logProcessor) ProcessLogs(_ context.Context, block eth.BlockRef, rcpts 
 	for _, rcpt := range rcpts {
 		for _, l := range rcpt.Logs {
 			// log hash represents the hash of *this* log as a potentially initiating message
-			logHash := logToLogHash(l)
+			logHash := LogToLogHash(l)
 			// The log may be an executing message emitted by the CrossL2Inbox
 			execMsg, err := p.eventDecoder(l)
 			if err != nil {
@@ -61,12 +56,12 @@ func (p *logProcessor) ProcessLogs(_ context.Context, block eth.BlockRef, rcpts 
 	return nil
 }
 
-// logToLogHash transforms a log into a hash that represents the log.
+// LogToLogHash transforms a log into a hash that represents the log.
 // it is the concatenation of the log's address and the hash of the log's payload,
 // which is then hashed again. This is the hash that is stored in the log storage.
 // The address is hashed into the payload hash to save space in the log storage,
 // and because they represent paired data.
-func logToLogHash(l *ethTypes.Log) common.Hash {
+func LogToLogHash(l *ethTypes.Log) common.Hash {
 	payloadHash := crypto.Keccak256Hash(types.LogToMessagePayload(l))
 	return types.PayloadHashToLogHash(payloadHash, l.Address)
 }

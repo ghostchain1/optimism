@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/broadcaster"
+	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/standard"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/deployer/testutil"
 	"github.com/ethereum-optimism/optimism/op-deployer/pkg/env"
 	"github.com/ethereum-optimism/optimism/op-service/testlog"
@@ -13,6 +14,8 @@ import (
 )
 
 func TestDeployMIPS(t *testing.T) {
+	t.Parallel()
+
 	_, artifacts := testutil.LocalArtifacts(t)
 
 	host, err := env.DefaultScriptHost(
@@ -20,12 +23,11 @@ func TestDeployMIPS(t *testing.T) {
 		testlog.Logger(t, log.LevelInfo),
 		common.Address{'D'},
 		artifacts,
-		0,
 	)
 	require.NoError(t, err)
 
 	input := DeployMIPSInput{
-		MipsVersion:    1,
+		MipsVersion:    uint64(standard.MIPSVersion),
 		PreimageOracle: common.Address{0xab},
 	}
 

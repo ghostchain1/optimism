@@ -12,52 +12,79 @@ import (
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/utils"
 	"github.com/ethereum-optimism/optimism/op-challenger/game/fault/trace/vm"
 	"github.com/ethereum-optimism/optimism/op-e2e/actions/helpers"
+	"github.com/ethereum-optimism/optimism/op-node/rollup"
 	"github.com/ethereum-optimism/optimism/op-program/client/claim"
+	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/require"
 )
 
-var konaHostPath, konaClientPath string
+var konaHostPath string
 
 func init() {
 	konaHostPath = os.Getenv("KONA_HOST_PATH")
-	konaClientPath = os.Getenv("KONA_CLIENT_PATH")
 }
 
 func IsKonaConfigured() bool {
-	return konaHostPath != "" && konaClientPath != ""
+	return konaHostPath != ""
+}
+
+func writeConfigs[T any](t helpers.Testing, workDir string, name string, cfg []*T, cfgPaths []string) {
+	for i, cfg := range cfg {
+		cfgPath := filepath.Join(workDir, fmt.Sprintf("%s_%d.json", name, i))
+		writeConfig(t, workDir, name, cfg, cfgPath)
+		cfgPaths[i] = cfgPath
+	}
+}
+
+func writeConfig[T any](t helpers.Testing, workDir string, name string, cfg *T, cfgPath string) {
+	ser, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(cfgPath, ser, fs.ModePerm))
 }
 
 func RunKonaNative(
 	t helpers.Testing,
 	workDir string,
-	env *L2FaultProofEnv,
+	rollupCfgs []*rollup.Config,
+	l1chainConfig *params.ChainConfig,
 	l1Rpc string,
 	l1BeaconRpc string,
-	l2Rpc string,
+	l2Rpcs []string,
 	fixtureInputs FixtureInputs,
 ) error {
 	// Write rollup config to tempdir.
-	rollupConfigPath := filepath.Join(workDir, "rollup.json")
-	ser, err := json.Marshal(env.Sd.RollupCfg)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(rollupConfigPath, ser, fs.ModePerm))
+	rollupCfgPaths := make([]string, len(rollupCfgs))
+	writeConfigs(t, workDir, "rollup", rollupCfgs, rollupCfgPaths)
+
+	// Write l1 chain config to tempdir.
+	l1chainConfigPath := filepath.Join(workDir, "l1chain.json")
+	writeConfig(t, workDir, "l1chain", l1chainConfig, l1chainConfigPath)
 
 	// Run the fault proof program from the state transition from L2 block L2Blocknumber - 1 -> L2BlockNumber.
 	vmCfg := vm.Config{
-		L1:               l1Rpc,
-		L1Beacon:         l1BeaconRpc,
-		L2:               l2Rpc,
-		RollupConfigPath: rollupConfigPath,
-		Server:           konaHostPath,
+		L1:                l1Rpc,
+		L1Beacon:          l1BeaconRpc,
+		L2s:               l2Rpcs,
+		RollupConfigPaths: rollupCfgPaths,
+		L1GenesisPath:     l1chainConfigPath,
+		Server:            konaHostPath,
 	}
 	inputs := utils.LocalGameInputs{
-		L1Head:        fixtureInputs.L1Head,
-		L2Head:        fixtureInputs.L2Head,
-		L2OutputRoot:  fixtureInputs.L2OutputRoot,
-		L2Claim:       fixtureInputs.L2Claim,
-		L2BlockNumber: big.NewInt(int64(fixtureInputs.L2BlockNumber)),
+		L1Head:           fixtureInputs.L1Head,
+		L2Head:           fixtureInputs.L2Head,
+		L2Claim:          fixtureInputs.L2Claim,
+		L2SequenceNumber: big.NewInt(int64(fixtureInputs.L2BlockNumber)),
 	}
-	hostCmd, err := vm.NewNativeKonaExecutor(konaClientPath).OracleCommand(vmCfg, workDir, inputs)
+
+	var hostCmd []string
+	var err error
+	if fixtureInputs.InteropEnabled {
+		inputs.AgreedPreState = fixtureInputs.AgreedPrestate
+		hostCmd, err = vm.NewNativeKonaSuperExecutor().OracleCommand(vmCfg, workDir, inputs)
+	} else {
+		inputs.L2OutputRoot = fixtureInputs.L2OutputRoot
+		hostCmd, err = vm.NewNativeKonaExecutor().OracleCommand(vmCfg, workDir, inputs)
+	}
 	require.NoError(t, err)
 
 	cmd := exec.Command(hostCmd[0], hostCmd[1:]...)
