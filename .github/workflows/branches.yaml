@@ -37,8 +37,8 @@ jobs:
 
   local:
     needs: prep
-    # only build if push to develop, or PR from a local branch (not a fork)
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    # only build if push to develop
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +81,8 @@ jobs:
 
   fork:
     needs: prep
-    # only build if PR from a fork
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    # build all pull requests without requiring cloud registry auth
+    if: github.event_name == 'pull_request'
     strategy:
       fail-fast: false
       matrix:
