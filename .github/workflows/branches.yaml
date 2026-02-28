@@ -81,8 +81,8 @@ jobs:
 
   fork:
     needs: prep
-    # build all pull requests without requiring cloud registry auth
-    if: github.event_name == 'pull_request'
+    # only run PR matrix builds in upstream repository where auth is configured
+    if: github.event_name == 'pull_request' && github.repository == 'ethereum-optimism/optimism'
     strategy:
       fail-fast: false
       matrix:
