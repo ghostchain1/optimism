@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "create2Salt": "0xd6b38cba2af7a29ca2d6b91f2fec79a272db2671fb7fe2811e495f46e59a10ed",
+  "appliedIntent": null,
+  "superchainDeployment": {
+    "proxyAdminAddress": "0x7964ef0fbd1306461bab9ad05118dbc4248d0546",
+    "superchainConfigProxyAddress": "0xc2be75506d5724086deb7245bd260cc9753911be",
+    "superchainConfigImplAddress": "0x0000000000000000000000000000000000000000",
+    "protocolVersionsProxyAddress": "0x79add5713b383daa0a138d3c4780c7a1804a8090",
+    "protocolVersionsImplAddress": "0x0000000000000000000000000000000000000000"
+  },
+  "implementationsDeployment": {
+    "opcmProxyAddress": "0x97353cc78a3433e10e4d4023d6353916760ea823",
+    "delayedWETHImplAddress": "0x0000000000000000000000000000000000000000",
+    "optimismPortalImplAddress": "0x0000000000000000000000000000000000000000",
+    "preimageOracleSingletonAddress": "0x0000000000000000000000000000000000000000",
+    "mipsSingletonAddress": "0x0000000000000000000000000000000000000000",
+    "systemConfigImplAddress": "0x0000000000000000000000000000000000000000",
+    "l1CrossDomainMessengerImplAddress": "0x0000000000000000000000000000000000000000",
+    "l1ERC721BridgeImplAddress": "0x0000000000000000000000000000000000000000",
+    "l1StandardBridgeImplAddress": "0x0000000000000000000000000000000000000000",
+    "optimismMintableERC20FactoryImplAddress": "0x0000000000000000000000000000000000000000",
+    "disputeGameFactoryImplAddress": "0x0000000000000000000000000000000000000000"
+  },
+  "opChainDeployments": null,
+  "l1StateDump": "H4sIAAAAAAAA/6quBQQAAP//Q7+mowIAAAA="
+}
+

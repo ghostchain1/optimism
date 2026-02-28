@@ -1,180 +1,214 @@
 package standard
 
 import (
+	"embed"
 	"fmt"
+	"net/url"
 
-	"github.com/ethereum-optimism/optimism/op-chain-ops/genesis"
-	"github.com/ethereum-optimism/optimism/op-core/forks"
+	"github.com/BurntSushi/toml"
 
-	"github.com/ethereum-optimism/superchain-registry/validation"
-
-	"github.com/ethereum/go-ethereum/superchain"
-
+	"github.com/ethereum-optimism/superchain-registry/superchain"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
 const (
 	GasLimit                        uint64 = 60_000_000
 	BasefeeScalar                   uint32 = 1368
 	BlobBaseFeeScalar               uint32 = 801949
-	WithdrawalDelaySeconds          uint64 = 302400
+	WithdrawalDelaySeconds          uint64 = 604800
 	MinProposalSizeBytes            uint64 = 126000
 	ChallengePeriodSeconds          uint64 = 86400
 	ProofMaturityDelaySeconds       uint64 = 604800
 	DisputeGameFinalityDelaySeconds uint64 = 302400
-	MIPSVersion                     uint64 = 8
+	MIPSVersion                     uint64 = 1
 	DisputeGameType                 uint32 = 1 // PERMISSIONED game type
 	DisputeMaxGameDepth             uint64 = 73
 	DisputeSplitDepth               uint64 = 30
 	DisputeClockExtension           uint64 = 10800
 	DisputeMaxClockDuration         uint64 = 302400
-	Eip1559DenominatorCanyon        uint64 = 250
-	Eip1559Denominator              uint64 = 50
-	Eip1559Elasticity               uint64 = 6
-
-	UseRevenueShare = true
 
 	ContractsV160Tag        = "op-contracts/v1.6.0"
-	ContractsV180Tag        = "op-contracts/v1.8.0-rc.4"
 	ContractsV170Beta1L2Tag = "op-contracts/v1.7.0-beta.1+l2-contracts"
-	ContractsV200Tag        = "op-contracts/v2.0.0"
-	ContractsV300Tag        = "op-contracts/v3.0.0"
-	ContractsV400Tag        = "op-contracts/v4.0.0-rc.7"
-	ContractsV410Tag        = "op-contracts/v4.1.0"
-	ContractsV500Tag        = "op-contracts/v5.0.0"
-	CurrentTag              = ContractsV500Tag
 )
-
-var L1FeesDepositor = common.HexToAddress("0xed9B99a703BaD32AC96FDdc313c0652e379251Fd")
 
 var DisputeAbsolutePrestate = common.HexToHash("0x038512e02c4c3f7bdaec27d00edf55b7155e0905301e1a88083e4e0a6764d54c")
 
-var VaultMinWithdrawalAmount = mustHexBigFromHex("0x8ac7230489e80000")
+//go:embed standard-versions-mainnet.toml
+var VersionsMainnetData string
 
-var GovernanceTokenOwner = common.HexToAddress("0xDeaDDEaDDeAdDeAdDEAdDEaddeAddEAdDEAdDEad")
+//go:embed standard-versions-sepolia.toml
+var VersionsSepoliaData string
 
-func L1VersionsFor(chainID uint64) (validation.Versions, error) {
+var L1VersionsSepolia L1Versions
+
+var L1VersionsMainnet L1Versions
+
+var DefaultL1ContractsTag = ContractsV160Tag
+
+var DefaultL2ContractsTag = ContractsV170Beta1L2Tag
+
+type L1Versions struct {
+	Releases map[string]L1VersionsReleases `toml:"releases"`
+}
+
+type L1VersionsReleases struct {
+	OptimismPortal               VersionRelease `toml:"optimism_portal"`
+	SystemConfig                 VersionRelease `toml:"system_config"`
+	AnchorStateRegistry          VersionRelease `toml:"anchor_state_registry"`
+	DelayedWETH                  VersionRelease `toml:"delayed_weth"`
+	DisputeGameFactory           VersionRelease `toml:"dispute_game_factory"`
+	FaultDisputeGame             VersionRelease `toml:"fault_dispute_game"`
+	PermissionedDisputeGame      VersionRelease `toml:"permissioned_dispute_game"`
+	MIPS                         VersionRelease `toml:"mips"`
+	PreimageOracle               VersionRelease `toml:"preimage_oracle"`
+	L1CrossDomainMessenger       VersionRelease `toml:"l1_cross_domain_messenger"`
+	L1ERC721Bridge               VersionRelease `toml:"l1_erc721_bridge"`
+	L1StandardBridge             VersionRelease `toml:"l1_standard_bridge"`
+	OptimismMintableERC20Factory VersionRelease `toml:"optimism_mintable_erc20_factory"`
+}
+
+type VersionRelease struct {
+	Version               string         `toml:"version"`
+	ImplementationAddress common.Address `toml:"implementation_address"`
+	Address               common.Address `toml:"address"`
+}
+
+var _ embed.FS
+
+func L1VersionsDataFor(chainID uint64) (string, error) {
 	switch chainID {
 	case 1:
-		return validation.StandardVersionsMainnet, nil
+		return VersionsMainnetData, nil
 	case 11155111:
-		return validation.StandardVersionsSepolia, nil
+		return VersionsSepoliaData, nil
+	case 1337:
+		return VersionsSepoliaData, nil
+	default:
+		return "", fmt.Errorf("unsupported chain ID: %d", chainID)
+	}
+}
+
+func L1VersionsFor(chainID uint64) (L1Versions, error) {
+	switch chainID {
+	case 1:
+		return L1VersionsMainnet, nil
+	case 11155111:
+		return L1VersionsSepolia, nil
+	case 1337:
+		return L1VersionsSepolia, nil
+	default:
+		return L1Versions{}, fmt.Errorf("unsupported chain ID: %d", chainID)
+	}
+}
+
+func SuperchainFor(chainID uint64) (*superchain.Superchain, error) {
+	switch chainID {
+	case 1:
+		return superchain.Superchains["mainnet"], nil
+	case 11155111:
+		return superchain.Superchains["sepolia"], nil
+	case 1337:
+		return superchain.Superchains["sepolia"], nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-func GuardianAddressFor(chainID uint64) (common.Address, error) {
+func ChainNameFor(chainID uint64) (string, error) {
 	switch chainID {
 	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.Guardian), nil
+		return "mainnet", nil
 	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.Guardian), nil
+		return "sepolia", nil
+	case 1337:
+		return "devnet-1337", nil
+	default:
+		return "", fmt.Errorf("unrecognized chain ID: %d", chainID)
+	}
+}
+
+func CommitForDeployTag(tag string) (string, error) {
+	switch tag {
+	case "op-contracts/v1.6.0":
+		return "33f06d2d5e4034125df02264a5ffe84571bd0359", nil
+	case "op-contracts/v1.7.0-beta.1+l2-contracts":
+		return "5e14a61547a45eef2ebeba677aee4a049f106ed8", nil
+	default:
+		return "", fmt.Errorf("unsupported tag: %s", tag)
+	}
+}
+
+func ManagerImplementationAddrFor(chainID uint64) (common.Address, error) {
+	switch chainID {
+	case 1:
+		// Generated using the bootstrap command on 10/18/2024.
+		return common.HexToAddress("0x18cec91779995ad14c880e4095456b9147160790"), nil
+	case 11155111:
+		// Generated using the bootstrap command on 10/18/2024.
+		return common.HexToAddress("0xf564eea7960ea244bfebcbbb17858748606147bf"), nil
+	case 1337:
+		// Use the deployed OPCM proxy from the local devnet deployment
+		return common.HexToAddress("0x97353cC78a3433e10E4d4023d6353916760Ea823"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-func ChallengerAddressFor(chainID uint64) (common.Address, error) {
+func ManagerOwnerAddrFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.Challenger), nil
-	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.Challenger), nil
-	default:
-		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
-	}
-}
-
-func SuperchainFor(chainID uint64) (superchain.Superchain, error) {
-	switch chainID {
-	case 1:
-		return superchain.GetSuperchain("mainnet")
-	case 11155111:
-		return superchain.GetSuperchain("sepolia")
-	default:
-		return superchain.Superchain{}, fmt.Errorf("unsupported chain ID: %d", chainID)
-	}
-}
-
-func OPCMImplAddressFor(chainID uint64, tag string) (common.Address, error) {
-	versionsData, err := L1VersionsFor(chainID)
-	if err != nil {
-		return common.Address{}, fmt.Errorf("unsupported chainID: %d", chainID)
-	}
-	versionData, ok := versionsData[validation.Semver(tag)]
-	if !ok {
-		return common.Address{}, fmt.Errorf("unsupported tag for chainID %d: %s", chainID, tag)
-	}
-	if versionData.OPContractsManager.Address != nil {
-		// op-contracts/v1.8.0 and earlier use proxied opcm
-		return common.Address(*versionData.OPContractsManager.Address), nil
-	}
-	if versionData.OPContractsManager.ImplementationAddress != nil {
-		// op-contracts/v2.0.0-rc.1 and later use non-proxied opcm
-		return common.Address(*versionData.OPContractsManager.ImplementationAddress), nil
-	}
-	return common.Address{}, fmt.Errorf("OPContractsManager address is nil for tag %s", tag)
-}
-
-// SuperchainProxyAdminAddrFor returns the address of the Superchain ProxyAdmin for the given chain ID.
-// These have been verified to be the ProxyAdmin addresses on Mainnet and Sepolia.
-// DO NOT MODIFY THIS METHOD WITHOUT CLEARING IT WITH THE EVM SAFETY TEAM.
-func SuperchainProxyAdminAddrFor(chainID uint64) (common.Address, error) {
-	switch chainID {
-	case 1:
+		// Set to superchain proxy admin
 		return common.HexToAddress("0x543bA4AADBAb8f9025686Bd03993043599c6fB04"), nil
 	case 11155111:
-		return common.HexToAddress("0x189aBAAaa82DfC015A588A7dbaD6F13b1D3485Bc"), nil
+		// Set to development multisig
+		return common.HexToAddress("0xDEe57160aAfCF04c34C887B5962D0a69676d3C8B"), nil
+	case 1337:
+		// Use local deployer as owner
+		return common.HexToAddress("0x7964ef0fBD1306461bab9Ad05118DBC4248D0546"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-func L1ProxyAdminOwner(chainID uint64) (common.Address, error) {
+func SystemOwnerAddrFor(chainID uint64) (common.Address, error) {
 	switch chainID {
 	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.L1ProxyAdminOwner), nil
+		// Set to owner of superchain proxy admin
+		return common.HexToAddress("0x5a0Aae59D09fccBdDb6C6CcEB07B7279367C3d2A"), nil
 	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.L1ProxyAdminOwner), nil
+		// Set to development multisig
+		return common.HexToAddress("0xDEe57160aAfCF04c34C887B5962D0a69676d3C8B"), nil
+	case 1337:
+		// Use local deployer as system owner
+		return common.HexToAddress("0x7964ef0fBD1306461bab9Ad05118DBC4248D0546"), nil
 	default:
 		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
 }
 
-func L2ProxyAdminOwner(chainID uint64) (common.Address, error) {
-	switch chainID {
-	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.L2ProxyAdminOwner), nil
-	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.L2ProxyAdminOwner), nil
+func ArtifactsURLForTag(tag string) (*url.URL, error) {
+	switch tag {
+	case "op-contracts/v1.6.0":
+		return url.Parse(standardArtifactsURL("ee07c78c3d8d4cd8f7a933c050f5afeebaa281b57b226cc6f092b19de2a8d61f"))
+	case "op-contracts/v1.7.0-beta.1+l2-contracts":
+		return url.Parse(standardArtifactsURL("b0fb1f6f674519d637cff39a22187a5993d7f81a6d7b7be6507a0b50a5e38597"))
 	default:
-		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
+		return nil, fmt.Errorf("unsupported tag: %s", tag)
 	}
 }
 
-func ProtocolVersionsOwner(chainID uint64) (common.Address, error) {
-	switch chainID {
-	case 1:
-		return common.Address(validation.StandardConfigRolesMainnet.ProtocolVersionsOwner), nil
-	case 11155111:
-		return common.Address(validation.StandardConfigRolesSepolia.ProtocolVersionsOwner), nil
-	default:
-		return common.Address{}, fmt.Errorf("unsupported chain ID: %d", chainID)
+func standardArtifactsURL(checksum string) string {
+	return fmt.Sprintf("https://storage.googleapis.com/oplabs-contract-artifacts/artifacts-v1-%s.tar.gz", checksum)
+}
+
+func init() {
+	L1VersionsMainnet = L1Versions{}
+	if err := toml.Unmarshal([]byte(VersionsMainnetData), &L1VersionsMainnet); err != nil {
+		panic(err)
 	}
-}
 
-// DefaultHardforkSchedule is used to determine which hardforks should be activated by default.
-func DefaultHardforkSchedule() *genesis.UpgradeScheduleDeployConfig {
-	sched := &genesis.UpgradeScheduleDeployConfig{}
-	sched.ActivateForkAtGenesis(forks.Jovian)
-
-	return sched
-}
-
-func mustHexBigFromHex(hex string) *hexutil.Big {
-	num := hexutil.MustDecodeBig(hex)
-	hexBig := hexutil.Big(*num)
-	return &hexBig
+	L1VersionsSepolia = L1Versions{}
+	if err := toml.Unmarshal([]byte(VersionsSepoliaData), &L1VersionsSepolia); err != nil {
+		panic(err)
+	}
 }

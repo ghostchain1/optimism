@@ -3,12 +3,10 @@
 *
 
 !/cannon
-!/devnet-sdk
-!/op-core
 !/op-batcher
+!/op-bootnode
 !/op-chain-ops
 !/op-deployer
-!/op-dripper
 !/op-challenger
 !/packages/contracts-bedrock/snapshots
 !/op-dispute-mon
@@ -19,20 +17,9 @@
 !/op-proposer
 !/op-service
 !/op-supervisor
-!/op-supernode
-!/op-interop-filter
-!/op-test-sequencer
 !/op-wheel
 !/op-alt-da
-!/op-faucet
-!/op-interop-mon
 !/go.mod
 !/go.sum
-!/justfiles
-!/mise.toml
-!/op-e2e/e2eutils
-!./ops/scripts/install_mise.sh
-
-**/bin
-**/testdata
-**/tests
+!/third_party/archiver
+!/third_party/archiver/**

@@ -22,11 +22,18 @@ runs:
         DATE=$(date +%Y%m%d)
         echo "date=$DATE" >> $GITHUB_OUTPUT
 
-    - name: Read KONA_VERSION from kona/version.json
+    - name: Read KONA_VERSION
       id: kona
       shell: bash
       run: |
-        KONA_VERSION=$(jq -r .version kona/version.json)
+        if [ -f kona/version.json ]; then
+          KONA_VERSION=$(jq -r .version kona/version.json)
+        elif [ -f kona-proofs/version.json ]; then
+          KONA_VERSION=$(jq -r .version kona-proofs/version.json)
+        else
+          echo "Could not find kona/version.json or kona-proofs/version.json" >&2
+          exit 1
+        fi
         echo "version=$KONA_VERSION" >> $GITHUB_OUTPUT
         echo "KONA_VERSION: $KONA_VERSION"
 

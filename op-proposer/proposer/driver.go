@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"math/big"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ethereum-optimism/optimism/op-proposer/bindings"
 	"github.com/ethereum-optimism/optimism/op-proposer/contracts"
 	"github.com/ethereum-optimism/optimism/op-proposer/metrics"
-	"github.com/ethereum-optimism/optimism/op-proposer/proposer/source"
 	"github.com/ethereum-optimism/optimism/op-service/dial"
 	"github.com/ethereum-optimism/optimism/op-service/eth"
 	"github.com/ethereum-optimism/optimism/op-service/sources/batching"
@@ -26,7 +24,8 @@ import (
 )
 
 var (
-	ErrProposerNotRunning = errors.New("proposer is not running")
+	supportedL2OutputVersion = eth.Bytes32{}
+	ErrProposerNotRunning    = errors.New("proposer is not running")
 )
 
 type L1Client interface {
@@ -47,8 +46,8 @@ type L2OOContract interface {
 
 type DGFContract interface {
 	Version(ctx context.Context) (string, error)
-	HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, common.Hash, error)
-	ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, extraData []byte) (txmgr.TxCandidate, error)
+	HasProposedSince(ctx context.Context, proposer common.Address, cutoff time.Time, gameType uint32) (bool, time.Time, error)
+	ProposalTx(ctx context.Context, gameType uint32, outputRoot common.Hash, l2BlockNum uint64) (txmgr.TxCandidate, error)
 }
 
 type RollupClient interface {
@@ -64,11 +63,8 @@ type DriverSetup struct {
 	L1Client    L1Client
 	Multicaller *batching.MultiCaller
 
-	// ProposalSource retrieves the proposal data to submit
-	ProposalSource source.ProposalSource
-
-	// Guard optionally vets proposals before submission.
-	Guard GuardClient
+	// RollupProvider's RollupClient() is used to retrieve output roots from
+	RollupProvider dial.RollupProvider
 }
 
 // L2OutputSubmitter is responsible for proposing outputs
@@ -81,14 +77,13 @@ type L2OutputSubmitter struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	running atomic.Bool
+	mutex   sync.Mutex
+	running bool
 
 	l2ooContract L2OOContract
 	l2ooABI      *abi.ABI
 
 	dgfContract DGFContract
-
-	guard GuardClient
 }
 
 // NewL2OutputSubmitter creates a new L2 Output Submitter
@@ -142,7 +137,6 @@ func newL2OOSubmitter(ctx context.Context, cancel context.CancelFunc, setup Driv
 
 		l2ooContract: l2ooContract,
 		l2ooABI:      parsed,
-		guard:        setup.Guard,
 	}, nil
 }
 
@@ -163,16 +157,19 @@ func newDGFSubmitter(ctx context.Context, cancel context.CancelFunc, setup Drive
 		cancel:      cancel,
 
 		dgfContract: dgfCaller,
-		guard:       setup.Guard,
 	}, nil
 }
 
 func (l *L2OutputSubmitter) StartL2OutputSubmitting() error {
 	l.Log.Info("Starting Proposer")
 
-	if !l.running.CompareAndSwap(false, true) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	if l.running {
 		return errors.New("proposer is already running")
 	}
+	l.running = true
 
 	if l.Cfg.WaitNodeSync {
 		err := l.waitNodeSync()
@@ -199,9 +196,13 @@ func (l *L2OutputSubmitter) StopL2OutputSubmittingIfRunning() error {
 func (l *L2OutputSubmitter) StopL2OutputSubmitting() error {
 	l.Log.Info("Stopping Proposer")
 
-	if !l.running.CompareAndSwap(true, false) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
+
+	if !l.running {
 		return ErrProposerNotRunning
 	}
+	l.running = false
 
 	l.cancel()
 	close(l.done)
@@ -216,9 +217,9 @@ func (l *L2OutputSubmitter) StopL2OutputSubmitting() error {
 // It returns the output to propose, and whether the proposal should be submitted at all.
 // The passed context is expected to be a lifecycle context. A network timeout
 // context will be derived from it.
-func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (source.Proposal, bool, error) {
+func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (*eth.OutputResponse, bool, error) {
 	if l.l2ooContract == nil {
-		return source.Proposal{}, false, fmt.Errorf("L2OutputOracle contract not set, cannot fetch next output info")
+		return nil, false, fmt.Errorf("L2OutputOracle contract not set, cannot fetch next output info")
 	}
 
 	cCtx, cancel := context.WithTimeout(ctx, l.Cfg.NetworkTimeout)
@@ -229,39 +230,36 @@ func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (source.Proposa
 	}
 	nextCheckpointBlockBig, err := l.l2ooContract.NextBlockNumber(callOpts)
 	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("querying next block number: %w", err)
+		return nil, false, fmt.Errorf("querying next block number: %w", err)
 	}
 	nextCheckpointBlock := nextCheckpointBlockBig.Uint64()
 	// Fetch the current L2 heads
 	currentBlockNumber, err := l.FetchCurrentBlockNumber(ctx)
 	if err != nil {
-		return source.Proposal{}, false, err
+		return nil, false, err
 	}
 
 	// Ensure that we do not submit a block in the future
 	if currentBlockNumber < nextCheckpointBlock {
 		l.Log.Debug("Proposer submission interval has not elapsed", "currentBlockNumber", currentBlockNumber, "nextBlockNumber", nextCheckpointBlock)
-		return source.Proposal{}, false, nil
+		return nil, false, nil
 	}
 
-	proposal, err := l.FetchOutput(ctx, nextCheckpointBlock)
+	output, err := l.FetchOutput(ctx, nextCheckpointBlock)
 	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("fetching output: %w", err)
-	}
-	if proposal.IsSuperRootProposal() {
-		panic("L2 Output Submitter should not be configured for Super Root proposals")
+		return nil, false, fmt.Errorf("fetching output: %w", err)
 	}
 
 	// Always propose if it's part of the Finalized L2 chain. Or if allowed, if it's part of the safe L2 chain.
-	if proposal.SequenceNum > proposal.Legacy.FinalizedL2.Number && (!l.Cfg.AllowNonFinalized || proposal.SequenceNum > proposal.Legacy.SafeL2.Number) {
+	if output.BlockRef.Number > output.Status.FinalizedL2.Number && (!l.Cfg.AllowNonFinalized || output.BlockRef.Number > output.Status.SafeL2.Number) {
 		l.Log.Debug("Not proposing yet, L2 block is not ready for proposal",
-			"l2_proposal", proposal.SequenceNum,
-			"l2_safe", proposal.Legacy.SafeL2,
-			"l2_finalized", proposal.Legacy.FinalizedL2,
+			"l2_proposal", output.BlockRef,
+			"l2_safe", output.Status.SafeL2,
+			"l2_finalized", output.Status.FinalizedL2,
 			"allow_non_finalized", l.Cfg.AllowNonFinalized)
-		return proposal, false, nil
+		return output, false, nil
 	}
-	return proposal, true, nil
+	return output, true, nil
 }
 
 // FetchDGFOutput queries the DGF for the latest game and infers whether it is time to make another proposal
@@ -269,40 +267,34 @@ func (l *L2OutputSubmitter) FetchL2OOOutput(ctx context.Context) (source.Proposa
 // a boolean for whether the proposal should be submitted at all.
 // The passed context is expected to be a lifecycle context. A network timeout
 // context will be derived from it.
-func (l *L2OutputSubmitter) FetchDGFOutput(ctx context.Context) (source.Proposal, bool, error) {
+func (l *L2OutputSubmitter) FetchDGFOutput(ctx context.Context) (*eth.OutputResponse, bool, error) {
 	cutoff := time.Now().Add(-l.Cfg.ProposalInterval)
-	proposedRecently, proposalTime, claim, err := l.dgfContract.HasProposedSince(ctx, l.Txmgr.From(), cutoff, l.Cfg.DisputeGameType)
+	proposedRecently, proposalTime, err := l.dgfContract.HasProposedSince(ctx, l.Txmgr.From(), cutoff, l.Cfg.DisputeGameType)
 	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("could not check for recent proposal: %w", err)
+		return nil, false, fmt.Errorf("could not check for recent proposal: %w", err)
 	}
 
 	if proposedRecently {
 		l.Log.Debug("Duration since last game not past proposal interval", "duration", time.Since(proposalTime))
-		return source.Proposal{}, false, nil
+		return nil, false, nil
 	}
+	l.Log.Info("No proposals found for at least proposal interval, submitting proposal now", "proposalInterval", l.Cfg.ProposalInterval)
 
 	// Fetch the current L2 heads
 	currentBlockNumber, err := l.FetchCurrentBlockNumber(ctx)
 	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("could not fetch current block number: %w", err)
+		return nil, false, fmt.Errorf("could not fetch current block number: %w", err)
 	}
 
 	if currentBlockNumber == 0 {
 		l.Log.Info("Skipping proposal for genesis block")
-		return source.Proposal{}, false, nil
+		return nil, false, nil
 	}
 
 	output, err := l.FetchOutput(ctx, currentBlockNumber)
 	if err != nil {
-		return source.Proposal{}, false, fmt.Errorf("could not fetch output at current block number %d: %w", currentBlockNumber, err)
+		return nil, false, fmt.Errorf("could not fetch output at current block number %d: %w", currentBlockNumber, err)
 	}
-
-	if claim == output.Root {
-		l.Log.Debug("Skipping proposal: output root unchanged since last proposed game", "last_proposed_root", claim, "output_root", output.Root)
-		return source.Proposal{}, false, nil
-	}
-
-	l.Log.Info("No proposals found for at least proposal interval, submitting proposal now", "proposalInterval", l.Cfg.ProposalInterval)
 
 	return output, true, nil
 }
@@ -310,48 +302,66 @@ func (l *L2OutputSubmitter) FetchDGFOutput(ctx context.Context) (source.Proposal
 // FetchCurrentBlockNumber gets the current block number from the [L2OutputSubmitter]'s [RollupClient]. If the `AllowNonFinalized` configuration
 // option is set, it will return the safe head block number, and if not, it will return the finalized head block number.
 func (l *L2OutputSubmitter) FetchCurrentBlockNumber(ctx context.Context) (uint64, error) {
-	status, err := l.ProposalSource.SyncStatus(ctx)
+	rollupClient, err := l.RollupProvider.RollupClient(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("getting rollup client: %w", err)
+	}
+
+	status, err := rollupClient.SyncStatus(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("getting sync status: %w", err)
 	}
 
 	// Use either the finalized or safe head depending on the config. Finalized head is default & safer.
 	if l.Cfg.AllowNonFinalized {
-		return status.SafeL2, nil
+		// In interop-aware OP Stack versions, SafeL2 may represent the cross-safe head, while
+		// LocalSafeL2 tracks L1-anchored safety for a single chain.
+		if status.LocalSafeL2 != (eth.L2BlockRef{}) {
+			return status.LocalSafeL2.Number, nil
+		}
+		return status.SafeL2.Number, nil
 	}
-	return status.FinalizedL2, nil
+	return status.FinalizedL2.Number, nil
 }
 
-func (l *L2OutputSubmitter) FetchOutput(ctx context.Context, block uint64) (source.Proposal, error) {
-	proposal, err := l.ProposalSource.ProposalAtSequenceNum(ctx, block)
+func (l *L2OutputSubmitter) FetchOutput(ctx context.Context, block uint64) (*eth.OutputResponse, error) {
+	rollupClient, err := l.RollupProvider.RollupClient(ctx)
 	if err != nil {
-		return source.Proposal{}, fmt.Errorf("fetching proposal at block %d: %w", block, err)
+		return nil, fmt.Errorf("getting rollup client: %w", err)
 	}
-	if onum := proposal.SequenceNum; onum != block && !proposal.IsSuperRootProposal() { // sanity check, e.g. in case of bad RPC caching
-		return source.Proposal{}, fmt.Errorf("proposal block number %d mismatches requested %d", proposal.SequenceNum, block)
+
+	output, err := rollupClient.OutputAtBlock(ctx, block)
+	if err != nil {
+		return nil, fmt.Errorf("fetching output at block %d: %w", block, err)
 	}
-	return proposal, nil
+	if output.Version != supportedL2OutputVersion {
+		return nil, fmt.Errorf("unsupported l2 output version: %v, supported: %v", output.Version, supportedL2OutputVersion)
+	}
+	if onum := output.BlockRef.Number; onum != block { // sanity check, e.g. in case of bad RPC caching
+		return nil, fmt.Errorf("output block number %d mismatches requested %d", output.BlockRef.Number, block)
+	}
+	return output, nil
 }
 
 // ProposeL2OutputTxData creates the transaction data for the ProposeL2Output function
-func (l *L2OutputSubmitter) ProposeL2OutputTxData(output source.Proposal) ([]byte, error) {
+func (l *L2OutputSubmitter) ProposeL2OutputTxData(output *eth.OutputResponse) ([]byte, error) {
 	return proposeL2OutputTxData(l.l2ooABI, output)
 }
 
 // proposeL2OutputTxData creates the transaction data for the ProposeL2Output function
-func proposeL2OutputTxData(abi *abi.ABI, output source.Proposal) ([]byte, error) {
+func proposeL2OutputTxData(abi *abi.ABI, output *eth.OutputResponse) ([]byte, error) {
 	return abi.Pack(
 		"proposeL2Output",
-		output.Root,
-		new(big.Int).SetUint64(output.SequenceNum),
-		output.CurrentL1.Hash,
-		new(big.Int).SetUint64(output.CurrentL1.Number))
+		output.OutputRoot,
+		new(big.Int).SetUint64(output.BlockRef.Number),
+		output.Status.CurrentL1.Hash,
+		new(big.Int).SetUint64(output.Status.CurrentL1.Number))
 }
 
-func (l *L2OutputSubmitter) ProposeL2OutputDGFTxCandidate(ctx context.Context, output source.Proposal) (txmgr.TxCandidate, error) {
+func (l *L2OutputSubmitter) ProposeL2OutputDGFTxCandidate(ctx context.Context, output *eth.OutputResponse) (txmgr.TxCandidate, error) {
 	cCtx, cancel := context.WithTimeout(ctx, l.Cfg.NetworkTimeout)
 	defer cancel()
-	return l.dgfContract.ProposalTx(cCtx, l.Cfg.DisputeGameType, output.Root, output.ExtraData())
+	return l.dgfContract.ProposalTx(cCtx, l.Cfg.DisputeGameType, common.Hash(output.OutputRoot), output.BlockRef.Number)
 }
 
 // We wait until l1head advances beyond blocknum. This is used to make sure proposal tx won't
@@ -383,8 +393,13 @@ func (l *L2OutputSubmitter) waitForL1Head(ctx context.Context, blockNum uint64) 
 }
 
 // sendTransaction creates & sends transactions through the underlying transaction manager.
-func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.Proposal) error {
-	l.Log.Info("Proposing output root", "output", output.Root, "sequenceNum", output.SequenceNum, "extraData", output.ExtraData())
+func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output *eth.OutputResponse) error {
+	err := l.waitForL1Head(ctx, output.Status.HeadL1.Number+1)
+	if err != nil {
+		return err
+	}
+
+	l.Log.Info("Proposing output root", "output", output.OutputRoot, "block", output.BlockRef)
 	var receipt *types.Receipt
 	if l.Cfg.DisputeGameFactoryAddr != nil {
 		candidate, err := l.ProposeL2OutputDGFTxCandidate(ctx, output)
@@ -396,10 +411,6 @@ func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.P
 			return err
 		}
 	} else {
-		err := l.waitForL1Head(ctx, output.Legacy.HeadL1.Number+1)
-		if err != nil {
-			return err
-		}
 		data, err := l.ProposeL2OutputTxData(output)
 		if err != nil {
 			return err
@@ -419,43 +430,10 @@ func (l *L2OutputSubmitter) sendTransaction(ctx context.Context, output source.P
 	} else {
 		l.Log.Info("Proposer tx successfully published",
 			"tx_hash", receipt.TxHash,
-			"l1blocknum", output.CurrentL1.Number,
-			"l1blockhash", output.CurrentL1.Hash)
+			"l1blocknum", output.Status.CurrentL1.Number,
+			"l1blockhash", output.Status.CurrentL1.Hash)
 	}
 	return nil
-}
-
-func (l *L2OutputSubmitter) guardCheck(ctx context.Context, output source.Proposal) bool {
-	if l.guard == nil {
-		return true
-	}
-
-	gctx := ctx
-	if l.Cfg.GuardTimeout > 0 {
-		var cancel context.CancelFunc
-		gctx, cancel = context.WithTimeout(ctx, l.Cfg.GuardTimeout)
-		defer cancel()
-	}
-
-	decision, err := l.guard.CheckProposal(gctx, output)
-	if err != nil {
-		l.Metr.RecordGuardDecision("error")
-		if l.Cfg.GuardFailOpen {
-			l.Log.Warn("Guard check failed, proceeding (fail-open)", "err", err)
-			return true
-		}
-		l.Log.Warn("Guard check failed, blocking proposal", "err", err)
-		return false
-	}
-
-	if !decision.Allow {
-		l.Metr.RecordGuardDecision("deny")
-		l.Log.Warn("Guard denied proposal", "sequenceNum", output.SequenceNum, "root", output.Root, "reason", decision.Reason)
-		return false
-	}
-
-	l.Metr.RecordGuardDecision("allow")
-	return true
 }
 
 // loop is responsible for creating & submitting the next outputs
@@ -478,24 +456,24 @@ func (l *L2OutputSubmitter) loop() {
 
 			// A note on retrying: the outer ticker already runs on a short
 			// poll interval, which has a default value of 6 seconds. So no
-			// retry logic is needed around proposal fetching here.
-			var proposal source.Proposal
+			// retry logic is needed around output fetching here.
+			var output *eth.OutputResponse
 			var shouldPropose bool
 			var err error
 			if l.dgfContract == nil {
-				proposal, shouldPropose, err = l.FetchL2OOOutput(ctx)
+				output, shouldPropose, err = l.FetchL2OOOutput(ctx)
 			} else {
-				proposal, shouldPropose, err = l.FetchDGFOutput(ctx)
+				output, shouldPropose, err = l.FetchDGFOutput(ctx)
 			}
 			if err != nil {
-				l.Log.Warn("Error getting proposal", "err", err)
+				l.Log.Warn("Error getting output", "err", err)
 				continue
 			} else if !shouldPropose {
 				// debug logging already in Fetch(DGF|L2OO)Output
 				continue
 			}
 
-			l.proposeOutput(ctx, proposal)
+			l.proposeOutput(ctx, output)
 		case <-l.done:
 			return
 		}
@@ -512,39 +490,25 @@ func (l *L2OutputSubmitter) waitNodeSync() error {
 		return fmt.Errorf("failed to retrieve current L1 block number: %w", err)
 	}
 
-	return dial.WaitL1Sync(l.ctx, l.Log, l1head, time.Second*12, func(ctx context.Context) (eth.L1BlockRef, error) {
-		status, err := l.ProposalSource.SyncStatus(ctx)
-		if err != nil {
-			return eth.L1BlockRef{}, err
-		}
-		return status.CurrentL1, nil
-	})
+	rollupClient, err := l.RollupProvider.RollupClient(l.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get rollup client: %w", err)
+	}
+
+	return dial.WaitRollupSync(l.ctx, l.Log, rollupClient, l1head, time.Second*12)
 }
 
-func (l *L2OutputSubmitter) proposeOutput(ctx context.Context, output source.Proposal) {
+func (l *L2OutputSubmitter) proposeOutput(ctx context.Context, output *eth.OutputResponse) {
 	cCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	if !l.guardCheck(cCtx, output) {
-		return
-	}
-
 	if err := l.sendTransaction(cCtx, output); err != nil {
-		logCtx := []interface{}{
+		l.Log.Error("Failed to send proposal transaction",
 			"err", err,
-			"l1blocknum", output.CurrentL1.Number,
-			"l1blockhash", output.CurrentL1.Hash,
-		}
-		// Add legacy data only if available
-		if output.Legacy.HeadL1 != (eth.L1BlockRef{}) {
-			logCtx = append(logCtx, "l1head", output.Legacy.HeadL1.Number)
-		}
-		l.Log.Error("Failed to send proposal transaction", logCtx...)
+			"l1blocknum", output.Status.CurrentL1.Number,
+			"l1blockhash", output.Status.CurrentL1.Hash,
+			"l1head", output.Status.HeadL1.Number)
 		return
 	}
-	l.Metr.RecordL2Proposal(output.SequenceNum)
-	if output.Legacy.BlockRef != (eth.L2BlockRef{}) {
-		// Record legacy metrics when available
-		l.Metr.RecordL2BlocksProposed(output.Legacy.BlockRef)
-	}
+	l.Metr.RecordL2BlocksProposed(output.BlockRef)
 }

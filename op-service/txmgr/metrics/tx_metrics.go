@@ -188,6 +188,11 @@ func (t *TxMetrics) RecordBaseFee(baseFee *big.Int) {
 }
 
 func (t *TxMetrics) RecordBlobBaseFee(blobBaseFee *big.Int) {
+	// Blob base fee is nil on chains where EIP-4844 is not active.
+	if blobBaseFee == nil {
+		t.blobBaseFee.Set(0)
+		return
+	}
 	bff, _ := blobBaseFee.Float64()
 	t.blobBaseFee.Set(bff)
 }

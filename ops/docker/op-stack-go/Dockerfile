@@ -9,59 +9,17 @@
 # It will default to the target platform.
 ARG TARGET_BASE_IMAGE=alpine:3.20
 
-# The ubuntu target base image is used for the op-challenger build with kona and asterisc.
-ARG UBUNTU_TARGET_BASE_IMAGE=ubuntu:22.04
-
-# The version of kona to use.
-# The only build that uses this is `op-challenger-target`.
-ARG KONA_VERSION=none
-
-# builder_foundry does not need to be built on $BUILDPLATFORM, as foundry produces static binaries.
-FROM alpine:3.21 AS builder_foundry
-
-# Build args are only-available in top-level by default, so we'll need to declare it inside the stage too
-ARG TARGETARCH
-
-RUN apk add --no-cache curl bash git jq
-
-COPY ./op-deployer/pkg/deployer/forge/version.json /tmp/op-deployer-versions.json
-
-# Verify forge checksums
-RUN <<-EOF
-    #!/bin/bash
-    set -e
-
-    FOUNDRY_VERSION="$(jq -r '.forge' /tmp/op-deployer-versions.json)"
-    FOUNDRY_PLATFORM=alpine_${TARGETARCH}
-    FOUNDRY_URL="https://github.com/foundry-rs/foundry/releases/download/${FOUNDRY_VERSION}/foundry_${FOUNDRY_VERSION}_${FOUNDRY_PLATFORM}.tar.gz"
-    DOWNLOAD_PATH="/tmp/forge.tar.gz"
-
-    # Download the artifact archive
-    curl -fL -o ${DOWNLOAD_PATH} "${FOUNDRY_URL}"
-
-    # Ensure the checksum matches our expectations
-    ACTUAL_SHA="$(sha256sum "${DOWNLOAD_PATH}" | awk '{print $1}')"
-    EXPECTED_SHA="$(jq -r --arg arch "${FOUNDRY_PLATFORM}" '.checksums[$arch]' /tmp/op-deployer-versions.json)"
-
-    [ "${ACTUAL_SHA}" == "${EXPECTED_SHA}" ] || (echo "Forge checksum mismatch: Expected $EXPECTED_SHA, got $ACTUAL_SHA" && exit 1)
-
-    # Extract the archive
-    tar -xzf "${DOWNLOAD_PATH}" -C /usr/local/bin forge
-EOF
-
-# Display installed version for visibility
-RUN forge --version
-
 # We may be cross-building for another platform. Specify which platform we need as builder.
-FROM --platform=$BUILDPLATFORM golang:1.24.10-alpine3.21 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.23-alpine3.20 AS builder
 
-RUN apk add --no-cache curl tar gzip make gcc musl-dev linux-headers git jq yq-go bash just
-
-ARG TARGETARCH
+RUN apk add --no-cache make gcc musl-dev linux-headers git jq bash
 
 # We copy the go.mod/sum first, so the `go mod download` does not have to re-run if dependencies do not change.
 COPY ./go.mod /app/go.mod
 COPY ./go.sum /app/go.sum
+# Local replace directives require the replaced module go.mod to exist during `go mod download`.
+COPY ./third_party/archiver/go.mod /app/third_party/archiver/go.mod
+COPY ./third_party/archiver/go.sum /app/third_party/archiver/go.sum
 
 WORKDIR /app
 
@@ -82,9 +40,7 @@ ARG GIT_COMMIT
 ARG GIT_DATE
 
 ARG TARGETOS
-
-# Show just version
-RUN just --version
+ARG TARGETARCH
 
 # separate docker-builds:
 # - proxyd
@@ -94,24 +50,11 @@ RUN just --version
 # The "id" defaults to the value of "target", the cache will thus be reused during this build.
 # "sharing" defaults to "shared", the cache will thus be available to other concurrent docker builds.
 
-FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.0.0 AS cannon-builder-v1-0-0
-FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.2.0 AS cannon-builder-v1-2-0
-FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.3.0 AS cannon-builder-v1-3-0
-FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.4.0 AS cannon-builder-v1-4-0
-FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.6.0 AS cannon-builder-v1-6-0
+FROM --platform=$BUILDPLATFORM us-docker.pkg.dev/oplabs-tools-artifacts/images/cannon:v1.0.0 AS cannon-builder-0
 
 FROM --platform=$BUILDPLATFORM builder AS cannon-builder
 ARG CANNON_VERSION=v0.0.0
-# Copy cannon binaries from previous versions
-COPY --from=cannon-builder-v1-0-0 /usr/local/bin/cannon ./cannon/multicannon/embeds/cannon-0
-COPY --from=cannon-builder-v1-3-0 /usr/local/bin/cannon-1 ./cannon/multicannon/embeds/cannon-1
-COPY --from=cannon-builder-v1-4-0 /usr/local/bin/cannon-2 ./cannon/multicannon/embeds/cannon-2
-COPY --from=cannon-builder-v1-2-0 /usr/local/bin/cannon-3 ./cannon/multicannon/embeds/cannon-3
-COPY --from=cannon-builder-v1-3-0 /usr/local/bin/cannon-4 ./cannon/multicannon/embeds/cannon-4
-COPY --from=cannon-builder-v1-4-0 /usr/local/bin/cannon-5 ./cannon/multicannon/embeds/cannon-5
-COPY --from=cannon-builder-v1-4-0 /usr/local/bin/cannon-6 ./cannon/multicannon/embeds/cannon-6
-COPY --from=cannon-builder-v1-6-0 /usr/local/bin/cannon-7 ./cannon/multicannon/embeds/cannon-7
-# Build current binaries
+COPY --from=cannon-builder-0 /usr/local/bin/cannon ./cannon/multicannon/embeds/cannon-0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd cannon && make cannon  \
   GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$CANNON_VERSION"
 
@@ -165,130 +108,62 @@ ARG OP_SUPERVISOR_VERSION=v0.0.0
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-supervisor && make op-supervisor  \
   GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE  VERSION="$OP_SUPERVISOR_VERSION"
 
-FROM --platform=$BUILDPLATFORM builder AS op-supernode-builder
-ARG OP_SUPERNODE_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-supernode && make op-supernode  \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE  VERSION="$OP_SUPERNODE_VERSION"
-
-FROM --platform=$BUILDPLATFORM builder AS op-interop-filter-builder
-ARG OP_INTEROP_FILTER_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-interop-filter && make op-interop-filter  \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE  VERSION="$OP_INTEROP_FILTER_VERSION"
-
-FROM --platform=$BUILDPLATFORM builder AS op-test-sequencer-builder
-ARG OP_TEST_SEQUENCER_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-test-sequencer && make op-test-sequencer  \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE  VERSION="$OP_TEST_SEQUENCER_VERSION"
-
 FROM --platform=$BUILDPLATFORM builder AS op-deployer-builder
-ARG OP_DEPLOYER_VERSION=v0.0.0
-COPY --from=builder_foundry /usr/local/bin/forge /usr/local/bin/forge
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build just \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_DEPLOYER_VERSION" \
-  op-deployer/build-go
+ARG OP_NODE_VERSION=v0.0.0
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-chain-ops && make op-deployer  \
+  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_DEPLOYER_VERSION"
 
-FROM --platform=$BUILDPLATFORM builder AS op-dripper-builder
-ARG OP_DRIPPER_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build cd op-dripper && make op-dripper  \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_DRIPPER_VERSION"
-
-FROM --platform=$BUILDPLATFORM builder AS op-faucet-builder
-ARG OP_FAUCET_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build just \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_FAUCET_VERSION" \
-  op-faucet/op-faucet
-
-FROM --platform=$BUILDPLATFORM builder AS op-interop-mon-builder
-ARG OP_INTEROP_MON_VERSION=v0.0.0
-RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build just \
-  GOOS=$TARGETOS GOARCH=$TARGETARCH GITCOMMIT=$GIT_COMMIT GITDATE=$GIT_DATE VERSION="$OP_INTEROP_MON_VERSION" \
-  op-interop-mon/op-interop-mon
-
-FROM $TARGET_BASE_IMAGE AS cannon-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS cannon-target
 COPY --from=cannon-builder /app/cannon/bin/cannon /usr/local/bin/
 COPY --from=cannon-builder /app/cannon/multicannon/embeds/* /usr/local/bin/
 CMD ["cannon"]
 
-FROM $TARGET_BASE_IMAGE AS op-program-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-program-target
 COPY --from=op-program-builder /app/op-program/bin/op-program /usr/local/bin/
 CMD ["op-program"]
 
-FROM $TARGET_BASE_IMAGE AS op-wheel-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-wheel-target
 COPY --from=op-wheel-builder /app/op-wheel/bin/op-wheel /usr/local/bin/
 CMD ["op-wheel"]
 
-FROM $TARGET_BASE_IMAGE AS op-node-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-node-target
 COPY --from=op-node-builder /app/op-node/bin/op-node /usr/local/bin/
 CMD ["op-node"]
 
-# Make the kona docker image published by upstream available as a source to copy kona from.
-FROM ghcr.io/op-rs/kona/kona-host:$KONA_VERSION AS kona
-
-# Also produce an op-challenger loaded with kona using ubuntu
-FROM $UBUNTU_TARGET_BASE_IMAGE AS op-challenger-target
-RUN apt-get update && apt-get install -y --no-install-recommends musl openssl ca-certificates
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-challenger-target
 COPY --from=op-challenger-builder /app/op-challenger/bin/op-challenger /usr/local/bin/
-# Copy in op-program and cannon
+# Make the bundled op-program the default cannon server
 COPY --from=op-program-builder /app/op-program/bin/op-program /usr/local/bin/
-ENV OP_CHALLENGER_CANNON_SERVER=/usr/local/bin/op-program
+ENV OP_CHALLENGER_CANNON_SERVER /usr/local/bin/op-program
+# Make the bundled cannon the default cannon executable
 COPY --from=cannon-builder /app/cannon/bin/cannon /usr/local/bin/
-ENV OP_CHALLENGER_CANNON_BIN=/usr/local/bin/cannon
-# Copy in kona
-COPY --from=kona /usr/local/bin/kona-host /usr/local/bin/
-ENV OP_CHALLENGER_ASTERISC_KONA_SERVER=/usr/local/bin/kona-host
-ENV OP_CHALLENGER_CANNON_KONA_SERVER=/usr/local/bin/kona-host
+ENV OP_CHALLENGER_CANNON_BIN /usr/local/bin/cannon
 CMD ["op-challenger"]
 
-FROM $TARGET_BASE_IMAGE AS op-dispute-mon-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-dispute-mon-target
 COPY --from=op-dispute-mon-builder /app/op-dispute-mon/bin/op-dispute-mon /usr/local/bin/
 CMD ["op-dispute-mon"]
 
-FROM $TARGET_BASE_IMAGE AS op-batcher-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-batcher-target
 COPY --from=op-batcher-builder /app/op-batcher/bin/op-batcher /usr/local/bin/
 CMD ["op-batcher"]
 
-FROM $TARGET_BASE_IMAGE AS op-proposer-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-proposer-target
 COPY --from=op-proposer-builder /app/op-proposer/bin/op-proposer /usr/local/bin/
 CMD ["op-proposer"]
 
-FROM $TARGET_BASE_IMAGE AS op-conductor-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-conductor-target
 COPY --from=op-conductor-builder /app/op-conductor/bin/op-conductor /usr/local/bin/
 CMD ["op-conductor"]
 
-FROM $TARGET_BASE_IMAGE AS da-server-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS da-server-target
 COPY --from=da-server-builder /app/op-alt-da/bin/da-server /usr/local/bin/
 CMD ["da-server"]
 
-FROM $TARGET_BASE_IMAGE AS op-supervisor-target
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-supervisor-target
 COPY --from=op-supervisor-builder /app/op-supervisor/bin/op-supervisor /usr/local/bin/
 CMD ["op-supervisor"]
 
-FROM $TARGET_BASE_IMAGE AS op-supernode-target
-COPY --from=op-supernode-builder /app/op-supernode/bin/op-supernode /usr/local/bin/
-CMD ["op-supernode"]
-
-FROM $TARGET_BASE_IMAGE AS op-interop-filter-target
-COPY --from=op-interop-filter-builder /app/op-interop-filter/bin/op-interop-filter /usr/local/bin/
-CMD ["op-interop-filter"]
-
-FROM $TARGET_BASE_IMAGE AS op-test-sequencer-target
-COPY --from=op-test-sequencer-builder /app/op-test-sequencer/bin/op-test-sequencer /usr/local/bin/
-CMD ["op-test-sequencer"]
-
-FROM $TARGET_BASE_IMAGE AS op-deployer-target
-RUN apk add --no-cache ca-certificates
-COPY --from=op-deployer-builder /usr/local/bin/forge /app/op-deployer/bin/op-deployer /usr/local/bin/
-ENV FORGE_ENV=alpine
+FROM --platform=$TARGETPLATFORM $TARGET_BASE_IMAGE AS op-deployer-target
+COPY --from=op-deployer-builder /app/op-chain-ops/bin/op-deployer /usr/local/bin/
 CMD ["op-deployer"]
-
-FROM $TARGET_BASE_IMAGE AS op-dripper-target
-COPY --from=op-dripper-builder /app/op-dripper/bin/op-dripper /usr/local/bin/
-CMD ["op-dripper"]
-
-FROM $TARGET_BASE_IMAGE AS op-faucet-target
-COPY --from=op-faucet-builder /app/op-faucet/bin/op-faucet /usr/local/bin/
-CMD ["op-faucet"]
-
-FROM $TARGET_BASE_IMAGE AS op-interop-mon-target
-COPY --from=op-interop-mon-builder /app/op-interop-mon/bin/op-interop-mon /usr/local/bin/
-CMD ["op-interop-mon"]
